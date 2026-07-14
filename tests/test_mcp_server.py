@@ -84,6 +84,15 @@ async def test_read_events_only_sees_its_own_run(monkeypatch):
     assert rows == []  # nothing from run a leaks into run b
 
 
+async def test_read_events_caps_limit(_identity):
+    # A client-supplied limit is capped server-side (trust boundary).
+    for i in range(6):
+        await mcp_server.emit_event("claim.made", {"i": i})
+    rows = await mcp_server.read_events(limit=10_000_000)
+    assert len(rows) <= 500
+    assert len(rows) == 6  # everything under the cap still comes back
+
+
 async def test_read_events_has_no_run_id_or_exclude_param():
     params = set(inspect.signature(mcp_server.read_events).parameters)
     assert "run_id" not in params

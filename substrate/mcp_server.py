@@ -60,7 +60,7 @@ async def read_events(
         since_id=since_id,
         types=types,
         correlation=correlation,
-        limit=limit,
+        limit=min(max(limit, 0), 500),  # cap client-supplied limit — trust boundary
     )
 
 
