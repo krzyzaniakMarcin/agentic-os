@@ -75,6 +75,7 @@ async def test_glob_type_filtering():
     assert types(await log.read_events(run_id=rid, types=["claim.*"])) == ["claim.made", "claim.rejected"]
     assert types(await log.read_events(run_id=rid, types=["*.made"])) == ["claim.made", "critique.made"]
     assert types(await log.read_events(run_id=rid, types=["critique.made"])) == ["critique.made"]
+    assert await log.read_events(run_id=rid, types=[]) == []  # empty filter matches nothing
 
 
 async def test_exclude_agent_and_correlation():

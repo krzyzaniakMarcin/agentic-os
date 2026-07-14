@@ -88,7 +88,7 @@ async def read_events(
 ) -> list[dict]:
     conds = ["run_id = $1", "id > $2"]
     args = [run_id, since_id]
-    if types:
+    if types is not None:  # [] means match nothing (not "no filter")
         args.append([_glob_to_like(t) for t in types])
         conds.append(f"type LIKE ANY(${len(args)}::text[])")
     if correlation is not None:
