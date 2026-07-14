@@ -458,13 +458,13 @@ agentic-os/
 - `substrate/log.py` + `substrate/mcp_server.py`: Postgres event log with `emit_event` / `read_events`, **single-writer (monotonic visibility, §4)**, **self-exclusion**, and **server-side identity**.
 - `agent/poll_loop.py` + `agent/runtimes/claude_code.py`: harness-driven loop (§6); one headless Claude Code session; **emit `agent.step` with `saw_events` + `usage` from day one (§4)**.
 - `observability/tracing.py`: Langfuse tracing on every model + tool call.
-- **Exit criterion:** `docker compose up`, one agent completes a real task, every step is visible in Langfuse and the `events` table, **and the episode replays from the log**.
+- **Exit criterion:** `docker compose up`, one agent completes a real task, every step is visible in Langfuse and the `events` table, **and the episode is recorded replayably** (full `agent.step` records — `saw_events` + `usage`; the playback engine itself is Phase 3). See [phase0-plan.md](./phase0-plan.md).
 
 ### Phase 1 — two agents, one topology (days 4–7)
 - `kernel/orchestrator.py`: spawn loops + rails, with **quiescence that excludes mid-step agents and a per-session `max_turns` rail (§3.1)**.
 - `topologies/supervisor.yaml`: supervisor + worker on one task, coordinating only through the log.
 - Exercise the **claim protocol** with two workers of the same role — confirm lowest-id-wins prevents duplicate work (§4).
-- **Exit criterion:** the agents solve a task with zero direct calls between them; the log fully explains **and replays** the episode.
+- **Exit criterion:** the agents solve a task with zero direct calls between them; the log fully explains the episode **and records it replayably** (playback engine is Phase 3).
 
 ### Phase 2 — prove the substrate: heterogeneity, KB, second topology (week 2)
 - Add a second runtime: `agent/runtimes/llm.py` + a `FunctionAgent` trigger — ship the **Gmail inbox summarizer** as the first non-Claude-Code agent. Proves the runtime abstraction.
