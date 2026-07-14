@@ -79,6 +79,7 @@ An agent = one Claude Code session + a **role definition**. The role defines:
 - `subscribes_to`: list of event-type globs (e.g. `task.*`, `claim.*`)
 - `emits`: declared event types (documentation + validation)
 - `tools`: which MCP servers/skills it can use
+- `see_own_events`: default `false` — whether the harness delivers the agent's *own* emissions back to it (needed only by self-observing protocols; §6)
 - optional `model`, `max_turns`, `temperature`
 
 The **only** way an agent affects another agent is by emitting events; it perceives others only through events its harness reads for it (§6 — the harness drives the loop, the model doesn't self-poll). Both go through the `substrate` MCP server (§5), which stamps the emitter identity server-side. Native Claude Code subagents are fine *inside* the session for decomposition, but they never cross the agent boundary.
@@ -186,10 +187,10 @@ CREATE INDEX idx_events_corr    ON events(run_id, correlation);
 CREATE INDEX idx_events_payload ON events USING gin (payload);  -- query into JSON
 ```
 
-#### Invariant: the log is totally ordered **and gap-free to readers**
-`BIGSERIAL` ids are assigned at insert but rows only become visible at **commit**. With concurrent emitters a reader can see `id=105` while `id=103` is still uncommitted, advance its cursor past 103, and never see it — a *nondeterministically* lost message, which is exactly what poisons the replay/comparison experiments this system exists for. Everything downstream (cursors, replay, leader election) assumes reads are gap-free, so this must hold:
+#### Invariant: monotonic visibility
+`BIGSERIAL` ids are assigned at insert but rows only become visible at **commit**. With concurrent emitters a reader can see `id=105` while `id=103` is still uncommitted, advance its cursor past 103, and never see it — a *nondeterministically* lost message, which is exactly what poisons the replay/comparison experiments this system exists for. The property downstream code (cursors, replay, leader election) actually needs is **monotonic visibility**: no event ever becomes visible *after* an event with a higher id has already been read. (Numeric gaps in ids are fine and expected — aborted transactions and sequence caching burn ids without producing rows; cursors tolerate gaps, so never assert on *consecutive* ids.) To guarantee monotonic visibility:
 
-> **All appends go through a single writer connection in the `substrate` MCP server.** At this throughput that fully serializes inserts and makes ids gap-free to readers. (Alternatives if you ever outgrow it: a transaction-level advisory lock around insert, or readers bounding by `pg_snapshot_xmin(pg_current_snapshot())`.)
+> **All appends go through a single writer connection in the `substrate` MCP server.** At this throughput that fully serializes inserts, so ids become visible in order. (Alternatives if you ever outgrow it: a transaction-level advisory lock around insert, or readers bounding by `pg_snapshot_xmin(pg_current_snapshot())`.)
 
 #### Payload envelope
 Every payload carries a version field from day one — `{"v": 1, ...}`. Costless now; retrofitting versioning onto a log you've promised never to rewrite is painful. Bump `v` when a payload shape changes; readers switch on it.
@@ -208,7 +209,7 @@ Big content (files, long outputs, diffs) goes to **artifact memory**; events car
 | `critique.made` | reviewer agent | Feedback on a claim |
 | `vote.cast` | any agent | Support/oppose in a decision protocol |
 | `artifact.written` | any agent | A file was committed to artifact memory (payload: path, git sha) |
-| `agent.step` | harness | One step's execution record: `{step_n, saw_events:[from,to], usage}` — replay + cost |
+| `agent.step` | harness (as the agent) | One step's execution record: `{step_n, saw_events:[from,to], usage}` — replay + cost. Emitted under the agent's own name so per-agent projections stay trivial. |
 | `kb.suggestion` | any agent | Proposed KB addition, awaiting owner review |
 | `question.asked` | any agent | Agent needs the owner; the human-in-the-loop agent delivers it (§3.7) |
 | `approval.granted` / `human.answered` | owner (via HIL agent) | Owner's response back into the run |
@@ -221,10 +222,15 @@ Big content (files, long outputs, diffs) goes to **artifact memory**; events car
 A `task.*` event reaches *every* agent subscribed to that type, so with two workers of the same role both would grab every task. Two ways to disambiguate, both pure convention on the total order:
 
 - **Direct routing** — tasks carry a `to:` field; subscription filtering respects it. Use when the assigner knows the target.
-- **Claim protocol** — a worker emits `task.claimed` referencing the task; **lowest event id wins**. The total order gives you leader election for free, and it's a reusable primitive for market/bidding topologies later.
+- **Claim protocol** — a worker emits `task.claimed` referencing the task; **lowest event id wins**. To learn whether it won, a claimant must also **subscribe to `task.claimed`** and compare ids before starting work — otherwise it emits a claim and begins immediately, defeating the protocol. The total order gives you leader election for free, and it's a reusable primitive for market/bidding topologies later.
 
 ### Replay
-Append-only + gap-free order gets you *structural* replay, but recorded model responses alone don't: two concurrent agents interleave reads nondeterministically, so on replay agent B's third step might see 6 events where the original saw 4 — making the recorded response contextually wrong. The fix is the `agent.step` event above: it records exactly the window each agent saw (`saw_events:[from_id, to_id]`) plus its `usage`. That turns the log into a **complete execution trace** — replay feeds each agent precisely its recorded windows in playback mode (recorded outputs instead of live model calls). `agent.step` is also how the kernel knows spend for `usd_budget` (sum the `usage`). **Record this from Phase 0/1, not Phase 3** — episodes not recorded this way are unreplayable forever.
+Monotonic-visibility order (invariant above) gets you *structural* replay, but you also need **what each agent saw when it stepped**: two concurrent agents interleave reads nondeterministically, so on replay agent B's third step might see 6 events where the original saw 4 — making its recorded output contextually wrong. The `agent.step` event records the id window each agent saw (`saw_events:[from_id, to_id]`) plus its `usage`, turning the log into a **complete execution trace**.
+
+**Playback is log-only — there is no extra capture.** An agent's recorded output for step N *is* the set of events it emitted between its `agent.step` boundaries, and those are already in the log. So `step()` in playback mode = look up and re-emit those events instead of calling the model. Because `saw_events` is a raw id range, replay must re-apply the **role's `types` filter** (and the self-exclusion) over that range to reconstruct exactly what was delivered.
+
+- Call-level playback *inside* a Claude Code step (intermediate tool-use turns) is finer granularity than the log records — that detail lives in **Langfuse traces**, not the event log. Fine, but know the trade: the log replays step-to-step, Langfuse holds the within-step detail.
+- `agent.step` is also how the kernel knows spend for `usd_budget` (sum the `usage`). **Record it from Phase 0/1, not Phase 3** — episodes not recorded this way are unreplayable forever.
 
 ---
 
@@ -279,6 +285,7 @@ Exposed to every agent as an MCP server named `substrate`. This is the stable in
 
 Notes:
 - `read_events` takes a **cursor** (`since_id`), so agents poll incrementally without re-reading history.
+- **Every call is implicitly scoped to the calling session's `run_id`** — the server derives it from the connection; there is no client-supplied `run_id` param (which would be spoofable). The `run_id` shown in the §6 pseudocode is the harness's own library call, not the MCP surface. Same for `exclude_agent`, which the server sets from the session identity.
 - **`memory_*` vs `kb_query`**: memory is agent scratch state (read+write); the knowledge base is your curated corpus (read-only to agents, returns cited passages). Agents propose KB additions via `kb.suggestion` events, not by writing directly.
 - `write_artifact` auto-emits `artifact.written`, keeping the log the single source of truth for "what happened".
 - **Emitter identity is stamped server-side.** The server sets `agent` from the session's own identity (per-agent connection/token) and never trusts an agent-supplied value. A confused model claiming to be another agent would silently corrupt coordination data.
@@ -294,6 +301,7 @@ Notes:
 Two things *could* poll the log: the **model** (by calling `read_events` itself) or the **harness** (the adapter reads on the agent's behalf and invokes the model only when there's something to react to). Make **harness-driven** the rule:
 
 - The adapter owns a **cursor per agent** and calls `read_events(since_id=cursor, types=subscription)` on a tick.
+- **The read excludes the agent's own emissions by default** (`WHERE agent != self`). Otherwise an agent that both subscribes to and emits the same type (e.g. `debater_pro` + `claim.made` in §7.3) is woken by its own claim and self-loops until a rail trips. *Don't* fix this by bumping the cursor past your own writes — another agent's events may have interleaved, and skipping them recreates the lost-message problem (§4). Filter by emitter; use the per-role `see_own_events: true` opt-in for protocols that genuinely need self-observation.
 - When — and only when — matching new events exist, it invokes the model **once**, injecting those events as the message. That is what makes `step(new_events) -> emits` literally true.
 - While idle it costs **zero tokens**. Model-driven polling burns tokens on every empty poll, and models forget to poll or poll obsessively — unreliable and expensive for a long-running Claude Code session.
 - `read_events` stays exposed as an MCP tool, but only for the model's **ad-hoc history queries** ("what critiques were already made on this task?"), never as the drive mechanism.
@@ -304,9 +312,11 @@ So the loop lives in `agent/poll_loop.py` and is shared by every runtime; each r
 # agent/poll_loop.py — one loop, every runtime
 async def run_agent(agent, cursor=0):
     while not agent.stopped:
-        events = await log.read_events(since_id=cursor,
-                                       types=agent.subscribes_to,
-                                       run_id=agent.run_id)   # gap-safe read (see §4)
+        events = await log.read_events(
+            since_id=cursor,
+            types=agent.subscribes_to,
+            exclude_agent=None if agent.see_own_events else agent.name,  # no self-echo
+            run_id=agent.run_id)                              # monotonic-visibility read (§4)
         if events:
             saw = (events[0].id, events[-1].id)
             emitted, usage = await agent.step(events)         # model invoked here, if any
@@ -443,7 +453,7 @@ agentic-os/
 
 ### Phase 0 — one agent, end to end (days 1–3)
 - `docker-compose.yml`: `db` (pgvector) + `kernel` come up with one command.
-- `substrate/log.py` + `substrate/mcp_server.py`: Postgres event log with `emit_event` / `read_events`, **single-writer (gap-free, §4)** and **server-side identity**.
+- `substrate/log.py` + `substrate/mcp_server.py`: Postgres event log with `emit_event` / `read_events`, **single-writer (monotonic visibility, §4)**, **self-exclusion**, and **server-side identity**.
 - `agent/poll_loop.py` + `agent/runtimes/claude_code.py`: harness-driven loop (§6); one headless Claude Code session; **emit `agent.step` with `saw_events` + `usage` from day one (§4)**.
 - `observability/tracing.py`: Langfuse tracing on every model + tool call.
 - **Exit criterion:** `docker compose up`, one agent completes a real task, every step is visible in Langfuse and the `events` table, **and the episode replays from the log**.
@@ -540,3 +550,7 @@ Gotchas to plan for:
 - **Secrets via `.env`, never committed.** Ship `.env.example` with the keys blank.
 - **One embedding model choice fixes `VECTOR(dims)`** in the KB schema — pick it before first ingest, or you'll be re-embedding.
 - **`depends_on` isn't "wait until ready".** Add a small wait-for-Postgres retry in the kernel's startup, or a healthcheck on `db`.
+
+---
+
+*End of sketch — v0.2.*
