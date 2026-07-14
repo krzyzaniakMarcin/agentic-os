@@ -158,3 +158,40 @@ async def test_loop_sleeps_and_skips_step_when_no_events(monkeypatch):
     a = _NoStep(Role(name="w", subscribes_to=["x"]), run_id="r1")
     await poll_loop.run_agent(a)
     assert stepped is False  # step() never invoked on an empty read
+
+
+async def test_loop_advances_cursor_and_step_n_across_iterations(monkeypatch):
+    reads = []
+    steps = []  # agent.step payloads, in order
+    batches = [[{"id": 3}, {"id": 5}], [{"id": 8}]]
+
+    async def fake_read(**kw):
+        reads.append(kw)
+        i = len(reads) - 1
+        return batches[i] if i < len(batches) else []
+
+    async def fake_emit(agent, type, payload, run_id, reply_to=None, correlation=None):
+        if type == "agent.step":
+            steps.append(payload)
+        return {"id": 0, "ts": 0.0}
+
+    monkeypatch.setattr(log, "read_events", fake_read)
+    monkeypatch.setattr(log, "emit", fake_emit)
+
+    class _TwoStep(Agent):
+        async def step(self, new_events):
+            if self.step_n >= 1:  # already recorded one step -> stop after this one
+                self.stop()
+            return [], {"n": self.step_n}
+
+    a = _TwoStep(Role(name="w", subscribes_to=["x"]), run_id="r1")
+    await poll_loop.run_agent(a)
+
+    # cursor advanced: second read starts after the first batch's last id
+    assert reads[0]["since_id"] == 0
+    assert reads[1]["since_id"] == 5
+    # step_n progressed 1 -> 2 with the right saw_events windows
+    assert [s["step_n"] for s in steps] == [1, 2]
+    assert steps[0]["saw_events"] == [3, 5]
+    assert steps[1]["saw_events"] == [8, 8]
+    assert a.step_n == 2
