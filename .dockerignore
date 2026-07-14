@@ -1,0 +1,9 @@
+.git
+.venv*/
+*.egg-info/
+data/
+docs/
+graphify-out/
+__pycache__/
+*.pyc
+.env

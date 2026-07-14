@@ -28,7 +28,7 @@
 
 ## Task list
 
-### T1 — `docker-compose.yml` + `sql/init/` + `.env.example`
+### T1 — `docker-compose.yml` + `sql/init/` + `.env.example` ✅ done
 - `db` (`pgvector/pgvector:pg16`), schema auto-applied from `./sql/init` on first boot.
 - `kernel` service; Dockerfile installs Python deps + Claude Code CLI.
 - Postgres healthcheck + a wait-for-db retry in startup (`depends_on` ≠ "ready").
@@ -70,6 +70,12 @@
 ### T7 — `scripts/run_phase0.py` (throwaway)
 - Emit `run.start` + one seed `task.created`; start one `run_agent`; wait for `run.complete` **under an `asyncio.wait_for` timeout** so a wedged agent doesn't hang the demo forever; dump the `events` table.
 - Absorbed by `orchestrator.py` in P1.
+
+### T8 — Langfuse self-host in `docker-compose.yml`
+- Added by owner decision: run Langfuse *in this compose*, not Cloud / an already-running instance (supersedes the T6 "reuse what's already running" note and arch §12's "start with Cloud").
+- The self-host stack is heavy — `langfuse-web`, `langfuse-worker`, `clickhouse`, `redis`, `minio`, plus Langfuse's own Postgres database. Add it as service blocks at the T1 anchor comment in `docker-compose.yml`; keep it behind a compose `profile` (e.g. `langfuse`) so `docker compose up` stays light unless tracing is wanted.
+- `.env.example` already carries `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` (T1), so T6 tracing points at `langfuse-web` with no further wiring once this lands.
+- Sequence: independent of T2–T5; must land **before T6** can send spans. Slot it as `T1 → T8 → … → T6`.
 
 ---
 
