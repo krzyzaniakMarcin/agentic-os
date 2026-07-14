@@ -34,7 +34,7 @@
 - Postgres healthcheck + a wait-for-db retry in startup (`depends_on` ≠ "ready").
 - **Only the `events` table this phase** — skip memory/kb DDL until those phases use them.
 
-### T2 — `substrate/log.py` (the core invariant — risk center)
+### T2 — `substrate/log.py` (the core invariant — risk center) ✅ done
 - Append-only `events` insert/read; every emit takes a **transaction-level advisory lock** (`pg_advisory_xact_lock`) around the insert → monotonic visibility holds across *any* number of writer processes/connections (§4). This matters because writers are plural even in P0: each stdio MCP server instance (T3) plus the harness's own `agent.step` emits.
 - `read_events(since_id, types, correlation, limit, exclude_agent, run_id)` with glob→SQL type matching. `exclude_agent` + `run_id` are library params the §6 loop passes (T4); the MCP tool (T3) omits `exclude_agent` and derives `run_id` from the connection.
 - `{"v": 1, ...}` payload envelope stamped on emit.
