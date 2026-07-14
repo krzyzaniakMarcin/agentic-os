@@ -40,7 +40,7 @@
 - `{"v": 1, ...}` payload envelope stamped on emit.
 - **Runnable self-check** (assert-based): two connections emitting concurrently — a reader that has seen id N never later observes a new id < N (the advisory lock makes this exercisable for real), plus glob-filter correctness.
 
-### T3 — `substrate/mcp_server.py` (the syscall boundary)
+### T3 — `substrate/mcp_server.py` (the syscall boundary) ✅ done
 - Exposes **`emit_event` + `read_events` only** (memory/kb/artifacts are later phases).
 - **Server-side identity stamping** — per-session, never trust an agent-supplied `agent`.
 - **`run_id` derived from the connection**, not a client param.
