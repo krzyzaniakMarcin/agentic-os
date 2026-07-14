@@ -3,8 +3,10 @@ import uuid
 
 import pytest
 
+from agent import poll_loop
 from agent.base import Agent, Emit
 from agent.role import Role, load_role
+from substrate import log
 
 
 @pytest.fixture(autouse=True)
@@ -67,11 +69,6 @@ def test_emit_defaults():
 
 
 # Task 3: poll_loop tests
-
-import asyncio
-
-from agent import poll_loop
-from substrate import log
 
 
 class _FakeAgent(Agent):
