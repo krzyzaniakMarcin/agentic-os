@@ -10,8 +10,6 @@ from agent.role import Role, load_role
 @pytest.fixture(autouse=True)
 async def _close_pool():
     yield
-    from substrate import log
-
     await log.close()
 
 
