@@ -1,3 +1,6 @@
+include:
+  - langfuse/docker-compose.yml   # self-hosted Langfuse (self-contained; see that file)
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -27,9 +30,6 @@ services:
       - ./config/claude:/root/.claude   # clean checked-in CLI config, NOT personal ~/.claude
     # T7 swaps this for: python scripts/run_phase0.py
     command: ["sleep", "infinity"]
-
-  # T8 (see phase0-plan.md) adds the Langfuse self-host stack here:
-  # clickhouse, redis, minio, langfuse-web, langfuse-worker.
 
 volumes:
   pgdata: {}
