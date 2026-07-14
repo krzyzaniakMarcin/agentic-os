@@ -47,14 +47,15 @@ async def _get_pool() -> asyncpg.Pool:
 
 
 async def close() -> None:
-    global _pool
+    global _pool, _pool_lock
     if _pool is not None:
         await _pool.close()
         _pool = None
+    _pool_lock = asyncio.Lock()  # fresh lock: old one may be bound to a dead event loop
 
 
 async def emit(agent, type, payload, run_id, reply_to=None, correlation=None) -> dict:
-    envelope = {"v": _ENVELOPE_V, **payload}
+    envelope = {**payload, "v": _ENVELOPE_V}
     pool = await _get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():

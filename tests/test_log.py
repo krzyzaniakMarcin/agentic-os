@@ -85,3 +85,26 @@ async def test_exclude_agent_and_correlation():
     assert [r["agent"] for r in excl] == ["b"]
     corr = await log.read_events(run_id=rid, correlation="task-1")
     assert [r["correlation"] for r in corr] == ["task-1"]
+
+
+async def test_envelope_version_always_wins():
+    # Caller-supplied payload["v"] must never override the stamped envelope
+    # version — the "v": _ENVELOPE_V stamp must be applied last.
+    rid = _run_id()
+    await log.emit("kernel", "run.start", {"v": 99, "cfg": 1}, run_id=rid)
+    rows = await log.read_events(run_id=rid)
+    assert rows[0]["payload"]["v"] == 1
+
+
+async def test_close_resets_pool_lock():
+    # A fresh asyncio.Lock() binds to the first event loop that contends on
+    # it. If close() didn't reset _pool_lock, a later _get_pool() call in a
+    # different event loop would raise "Lock is bound to a different event
+    # loop". Assert the invariant directly: close() clears _pool and swaps in
+    # a brand-new lock object.
+    rid = _run_id()
+    await log.emit("kernel", "run.start", {}, run_id=rid)  # ensure pool exists
+    old_lock_id = id(log._pool_lock)
+    await log.close()
+    assert log._pool is None
+    assert id(log._pool_lock) != old_lock_id
