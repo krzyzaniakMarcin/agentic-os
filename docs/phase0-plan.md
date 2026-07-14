@@ -48,7 +48,8 @@
 - Stdio-per-session means **multiple server processes = multiple writer connections**. The monotonic-visibility invariant is carried by the advisory lock in `log.py` (T2), *not* by connection count — no shared long-running server needed.
 - Self-exclusion does *not* live here — it's the harness's job (§6).
 
-### T4 — `agent/poll_loop.py` + `agent/role.py` + `agent/base.py`
+### T4 — `agent/poll_loop.py` + `agent/role.py` + `agent/base.py` ✅ done
+- Implementation plan: [2026-07-14-t4-poll-loop.md](./superpowers/plans/2026-07-14-t4-poll-loop.md).
 - Shared `run_agent` loop (§6): cursor per agent, `read_events(exclude_agent=self unless see_own_events)`, invoke `step()` only on new events.
 - **Who emits what (resolve before T3/T5):** for the Claude Code runtime the *model* emits `claim.made` / `run.complete` directly via the substrate MCP (identity stamped server-side). So `step()` returns **`usage` only** (`emits=[]`), and the harness loop emits **only `agent.step`** — no double-emit. The `step()->(emits, usage)` contract stays (other runtimes like `FunctionAgent` will return real emits), but the CC loop's per-emit branch is inert in Phase 0.
 - **`agent.step` with `saw_events` + `usage` every step** (§4). Replay bookkeeping still works: the model's emits land *between* consecutive `agent.step` records, so each step's output window is well-defined even though the harness didn't emit them.
