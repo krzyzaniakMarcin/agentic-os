@@ -16,7 +16,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "python-dotenv>=1"]
 
 [tool.setuptools]
-packages = ["substrate"]
+packages = ["substrate", "agent"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
