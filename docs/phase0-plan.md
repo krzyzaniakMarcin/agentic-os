@@ -35,16 +35,17 @@
 - **Only the `events` table this phase** — skip memory/kb DDL until those phases use them.
 
 ### T2 — `substrate/log.py` (the core invariant — risk center)
-- Append-only `events` insert/read over a **single writer connection** → monotonic-visibility guarantee (§4).
+- Append-only `events` insert/read; every emit takes a **transaction-level advisory lock** (`pg_advisory_xact_lock`) around the insert → monotonic visibility holds across *any* number of writer processes/connections (§4). This matters because writers are plural even in P0: each stdio MCP server instance (T3) plus the harness's own `agent.step` emits.
 - `read_events(since_id, types, correlation, limit, exclude_agent, run_id)` with glob→SQL type matching. `exclude_agent` + `run_id` are library params the §6 loop passes (T4); the MCP tool (T3) omits `exclude_agent` and derives `run_id` from the connection.
 - `{"v": 1, ...}` payload envelope stamped on emit.
-- **Runnable self-check** (assert-based): a reader cursor never observes id N before an id < N that will ever exist (single-writer serialization holds), plus glob-filter correctness. (No real concurrency to exercise with one writer connection — the invariant is about visibility ordering, not races.)
+- **Runnable self-check** (assert-based): two connections emitting concurrently — a reader that has seen id N never later observes a new id < N (the advisory lock makes this exercisable for real), plus glob-filter correctness.
 
 ### T3 — `substrate/mcp_server.py` (the syscall boundary)
 - Exposes **`emit_event` + `read_events` only** (memory/kb/artifacts are later phases).
 - **Server-side identity stamping** — per-session, never trust an agent-supplied `agent`.
 - **`run_id` derived from the connection**, not a client param.
 - **Connection identity for stateless subprocesses:** each `claude -p` step spawns a fresh stdio MCP connection, so the server learns *which agent / which run* from **env vars (`AGENT_NAME`, `RUN_ID`) set on the subprocess** and inherited by the stdio server it spawns. Trivial, but decide it before T3/T5 integration or it stalls there.
+- Stdio-per-session means **multiple server processes = multiple writer connections**. The monotonic-visibility invariant is carried by the advisory lock in `log.py` (T2), *not* by connection count — no shared long-running server needed.
 - Self-exclusion does *not* live here — it's the harness's job (§6).
 
 ### T4 — `agent/poll_loop.py` + `agent/role.py` + `agent/base.py`
@@ -64,6 +65,7 @@
 - OTel → **local self-hosted Langfuse** — point `.env` at the existing local instance (host URL + keys). Don't add the heavy 4-container stack to this compose file; reuse what's already running.
 - Model + tool calls happen *inside* the `claude -p` subprocess, so per-call spans require configuring **Claude Code's own OTel export** on that subprocess (T5), pointed at Langfuse's OTLP endpoint — a second integration with its own failure modes.
 - **Honest Phase 0 scope:** step-level spans + `usage` from `tracing.py` guaranteed; per-tool-call spans come from the CC OTel export when it's wired. Exit criterion ("every step visible in Langfuse") is met by step-level; per-call is the stretch.
+- **Verify in the first hour of T6** that CC's OTel export actually emits *trace spans* (not only metrics/logs). If it's metrics/logs only, per-tool-call spans are unreachable via env vars — kill the stretch goal then, not after wiring endpoints.
 
 ### T7 — `scripts/run_phase0.py` (throwaway)
 - Emit `run.start` + one seed `task.created`; start one `run_agent`; wait for `run.complete` **under an `asyncio.wait_for` timeout** so a wedged agent doesn't hang the demo forever; dump the `events` table.
