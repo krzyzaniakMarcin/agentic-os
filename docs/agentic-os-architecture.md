@@ -222,7 +222,7 @@ Big content (files, long outputs, diffs) goes to **artifact memory**; events car
 A `task.*` event reaches *every* agent subscribed to that type, so with two workers of the same role both would grab every task. Two ways to disambiguate, both pure convention on the total order:
 
 - **Direct routing** — tasks carry a `to:` field; subscription filtering respects it. Use when the assigner knows the target.
-- **Claim protocol** — a worker emits `task.claimed` referencing the task; **lowest event id wins**. To learn whether it won, a claimant must also **subscribe to `task.claimed`** and compare ids before starting work — otherwise it emits a claim and begins immediately, defeating the protocol. The total order gives you leader election for free, and it's a reusable primitive for market/bidding topologies later.
+- **Claim protocol** — a worker emits `task.claimed` referencing the task; **lowest event id wins**. The commit rule falls straight out of the single-writer invariant (§4): appends serialize through one connection, so **the moment `emit_event` returns id `X`, every event with id < `X` is already visible**. The claimant therefore does one immediate ad-hoc `read_events` (the MCP one — it returns own events) filtered to `task.claimed` for that task: no lower-id claim present = it won. One read, zero wait, no cursor dependency — don't gate this on the subscription-delivered cursor, which self-exclusion can leave stalled below `X` forever when there are no competing events. A claimant that skips the check and starts work on emit defeats the protocol. The total order gives you leader election for free, and it's a reusable primitive for market/bidding topologies later.
 
 ### Replay
 Monotonic-visibility order (invariant above) gets you *structural* replay, but you also need **what each agent saw when it stepped**: two concurrent agents interleave reads nondeterministically, so on replay agent B's third step might see 6 events where the original saw 4 — making its recorded output contextually wrong. The `agent.step` event records the id window each agent saw (`saw_events:[from_id, to_id]`) plus its `usage`, turning the log into a **complete execution trace**.
@@ -230,6 +230,7 @@ Monotonic-visibility order (invariant above) gets you *structural* replay, but y
 **Playback is log-only — there is no extra capture.** An agent's recorded output for step N *is* the set of events it emitted between its `agent.step` boundaries, and those are already in the log. So `step()` in playback mode = look up and re-emit those events instead of calling the model. Because `saw_events` is a raw id range, replay must re-apply the **role's `types` filter** (and the self-exclusion) over that range to reconstruct exactly what was delivered.
 
 - Call-level playback *inside* a Claude Code step (intermediate tool-use turns) is finer granularity than the log records — that detail lives in **Langfuse traces**, not the event log. Fine, but know the trade: the log replays step-to-step, Langfuse holds the within-step detail.
+- **Replay re-emits under a new `run_id`, so events get new ids.** But recorded payloads carry `reply_to`, `correlation`, and `saw_events` windows in the *original* ids. The harness must keep an **original→replay id map** and rewrite those references (or run the comparison in original-id space). Whoever writes `test_replay.py` hits this in the first hour.
 - `agent.step` is also how the kernel knows spend for `usd_budget` (sum the `usage`). **Record it from Phase 0/1, not Phase 3** — episodes not recorded this way are unreplayable forever.
 
 ---
@@ -285,7 +286,8 @@ Exposed to every agent as an MCP server named `substrate`. This is the stable in
 
 Notes:
 - `read_events` takes a **cursor** (`since_id`), so agents poll incrementally without re-reading history.
-- **Every call is implicitly scoped to the calling session's `run_id`** — the server derives it from the connection; there is no client-supplied `run_id` param (which would be spoofable). The `run_id` shown in the §6 pseudocode is the harness's own library call, not the MCP surface. Same for `exclude_agent`, which the server sets from the session identity.
+- **Every call is implicitly scoped to the calling session's `run_id`** — the server derives it from the connection; there is no client-supplied `run_id` param (which would be spoofable). The `run_id` shown in the §6 pseudocode is the harness's own library call, not the MCP surface.
+- **Self-exclusion lives only in the harness drive loop, not the MCP tool.** An ad-hoc `read_events` can't self-loop (nothing wakes on its results), and agents have legitimate reasons to read their own history — "what claims did I already make?", or recovering state after a restart. So the MCP `read_events` returns *everything*, including the caller's own events; only the §6 loop applies `exclude_agent`. (Identity stamping on *emit* stays server-enforced — that's the part that matters.)
 - **`memory_*` vs `kb_query`**: memory is agent scratch state (read+write); the knowledge base is your curated corpus (read-only to agents, returns cited passages). Agents propose KB additions via `kb.suggestion` events, not by writing directly.
 - `write_artifact` auto-emits `artifact.written`, keeping the log the single source of truth for "what happened".
 - **Emitter identity is stamped server-side.** The server sets `agent` from the session's own identity (per-agent connection/token) and never trusts an agent-supplied value. A confused model claiming to be another agent would silently corrupt coordination data.
@@ -474,7 +476,7 @@ agentic-os/
 
 ### Phase 3 — research harness (week 3+)
 - `experiments/run.py`: run a topology against a fixed dataset, score outcomes, push coordination metrics to Langfuse datasets.
-- `tests/test_replay.py`: playback-mode determinism.
+- `tests/test_replay.py`: playback-mode determinism (needs the original→replay id map — see §4 Replay).
 - Now iterate on protocols (debate, market-based bidding, blackboard) as pure config/prompt experiments.
 
 ---
