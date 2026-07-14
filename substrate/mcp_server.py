@@ -41,3 +41,24 @@ async def emit_event(
         reply_to=reply_to,
         correlation=correlation,
     )
+
+
+@mcp.tool()
+async def read_events(
+    since_id: int = 0,
+    types: list[str] | None = None,
+    correlation: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Read events from the shared log, filtered. Use to observe other agents.
+
+    Implicitly scoped to this session's run_id (server-derived). Returns the
+    caller's own events too — self-exclusion lives only in the harness (§6).
+    """
+    return await log.read_events(
+        run_id=_require("RUN_ID"),
+        since_id=since_id,
+        types=types,
+        correlation=correlation,
+        limit=limit,
+    )

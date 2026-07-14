@@ -52,3 +52,40 @@ async def test_emit_event_requires_identity(monkeypatch):
     monkeypatch.setenv("RUN_ID", _run_id())
     with pytest.raises(RuntimeError):
         await mcp_server.emit_event("claim.made", {})
+
+
+async def test_read_events_is_run_scoped_and_returns_own_events(_identity):
+    # Two emits from the same agent; the MCP read must return BOTH — no
+    # self-exclusion on the syscall surface (that's the harness's job, §6).
+    await mcp_server.emit_event("claim.made", {"i": 1})
+    await mcp_server.emit_event("run.complete", {"i": 2})
+    rows = await mcp_server.read_events()
+    assert [r["type"] for r in rows] == ["claim.made", "run.complete"]
+    assert {r["agent"] for r in rows} == {"worker"}  # caller sees its own events
+
+
+async def test_read_events_passes_through_filters(_identity):
+    await mcp_server.emit_event("claim.made", {})
+    await mcp_server.emit_event("claim.rejected", {})
+    await mcp_server.emit_event("critique.made", {})
+    rows = await mcp_server.read_events(types=["claim.*"])
+    assert sorted(r["type"] for r in rows) == ["claim.made", "claim.rejected"]
+
+
+async def test_read_events_only_sees_its_own_run(monkeypatch):
+    # run_id is derived from env, not a client param — a session cannot read
+    # another run's events.
+    rid_a, rid_b = _run_id(), _run_id()
+    monkeypatch.setenv("AGENT_NAME", "worker")
+    monkeypatch.setenv("RUN_ID", rid_a)
+    await mcp_server.emit_event("claim.made", {"run": "a"})
+    monkeypatch.setenv("RUN_ID", rid_b)
+    rows = await mcp_server.read_events()
+    assert rows == []  # nothing from run a leaks into run b
+
+
+async def test_read_events_has_no_run_id_or_exclude_param():
+    params = set(inspect.signature(mcp_server.read_events).parameters)
+    assert "run_id" not in params
+    assert "exclude_agent" not in params
+    assert params == {"since_id", "types", "correlation", "limit"}
