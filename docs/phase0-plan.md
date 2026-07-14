@@ -28,7 +28,7 @@
 
 ## Task list
 
-### T1 — `docker-compose.yml` + `sql/init/` + `.env.example`
+### T1 — `docker-compose.yml` + `sql/init/` + `.env.example` ✅ done
 - `db` (`pgvector/pgvector:pg16`), schema auto-applied from `./sql/init` on first boot.
 - `kernel` service; Dockerfile installs Python deps + Claude Code CLI.
 - Postgres healthcheck + a wait-for-db retry in startup (`depends_on` ≠ "ready").
@@ -70,6 +70,14 @@
 ### T7 — `scripts/run_phase0.py` (throwaway)
 - Emit `run.start` + one seed `task.created`; start one `run_agent`; wait for `run.complete` **under an `asyncio.wait_for` timeout** so a wedged agent doesn't hang the demo forever; dump the `events` table.
 - Absorbed by `orchestrator.py` in P1.
+
+### T8 — Langfuse self-host in `docker-compose.yml` ✅ done
+- Owner decision: run Langfuse *in this compose*, not Cloud / an already-running instance (supersedes the T6 "reuse what's already running" note and arch §12's "start with Cloud").
+- Implemented as a **separate `langfuse/docker-compose.yml`** (`langfuse-web`, `langfuse-worker`, `langfuse-clickhouse`, `langfuse-redis`, `langfuse-minio`, `langfuse-db`) that the top-level compose pulls in via `include:`. Services are `langfuse-`prefixed so nothing collides with the app's `db`; only `langfuse-web:3000` is published.
+- **Self-contained URLs/creds:** every internal URL and credential in the Langfuse file is a literal, *not* `${VAR}` — otherwise the app's `.env` (`POSTGRES_*`, `DATABASE_URL`) would leak in and point Langfuse's migrations at the app's events DB. Verified: kernel → `@db/agentic_os`, Langfuse → `@langfuse-db/langfuse`.
+- `LANGFUSE_INIT_*` auto-provisions org `agentic-os` / project `agentic-os` on first boot with known keys; `.env.example` `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY` match them, so T6 tracing works with zero manual UI setup. Verified: kernel authenticates to `langfuse-web:3000` and reads the project.
+- Included unconditionally (not behind a profile) per owner request, so `docker compose up` now brings the full observability stack up too — heavier first boot (pulls ClickHouse/MinIO/Redis) is the accepted trade.
+- Sequence: independent of T2–T5; lands before T6. `T1 → T8 → … → T6`.
 
 ---
 
