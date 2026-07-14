@@ -1,8 +1,18 @@
 """T4 check: harness-driven poll loop, role/step contract (arch §6)."""
+import uuid
+
 import pytest
 
 from agent.base import Agent, Emit
 from agent.role import Role, load_role
+
+
+@pytest.fixture(autouse=True)
+async def _close_pool():
+    yield
+    from substrate import log
+
+    await log.close()
 
 
 def test_role_defaults():
@@ -195,3 +205,27 @@ async def test_loop_advances_cursor_and_step_n_across_iterations(monkeypatch):
     assert steps[0]["saw_events"] == [3, 5]
     assert steps[1]["saw_events"] == [8, 8]
     assert a.step_n == 2
+
+
+async def test_loop_records_agent_step_against_real_log():
+    rid = f"test-{uuid.uuid4()}"
+    # Another agent seeds a subscribed event.
+    seed = await log.emit("kernel", "task.created", {"goal": "answer"}, run_id=rid)
+
+    class _OneStep(Agent):
+        async def step(self, new_events):
+            self.stop()
+            return [Emit("claim.made", {"answer": 42})], {"tokens": 3}
+
+    a = _OneStep(Role(name="worker", subscribes_to=["task.created"]), run_id=rid)
+    await poll_loop.run_agent(a)
+
+    rows = await log.read_events(run_id=rid)
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["claim.made"]["agent"] == "worker"
+    assert by_type["claim.made"]["payload"] == {"v": 1, "answer": 42}
+    step = by_type["agent.step"]
+    assert step["agent"] == "worker"
+    assert step["payload"]["saw_events"] == [seed["id"], seed["id"]]
+    assert step["payload"]["step_n"] == 1
+    assert step["payload"]["usage"] == {"tokens": 3}
