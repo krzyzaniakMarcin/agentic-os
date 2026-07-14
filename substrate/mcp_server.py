@@ -62,3 +62,7 @@ async def read_events(
         correlation=correlation,
         limit=limit,
     )
+
+
+if __name__ == "__main__":  # stdio transport: one process per `claude -p` step (T5)
+    mcp.run()
