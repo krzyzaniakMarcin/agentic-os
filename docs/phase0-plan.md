@@ -61,6 +61,7 @@
 - Parse `usage` from result JSON (feeds the harness's `agent.step`).
 - The model emits `claim.made` + `run.complete` through the substrate MCP (see T4 — `step()` returns usage only).
 - **Set Claude Code's own OTel env vars on the subprocess** (telemetry endpoint → Langfuse OTLP) so per-model/per-tool spans *inside* the subprocess reach Langfuse. Without this you get one span per step, not per call.
+- **Rate-limit wait-and-resume (single-agent):** when the `claude -p` subprocess fails on an API/usage limit, parse the reset time from the result JSON, `await asyncio.sleep` until it, then re-invoke the *same* step — the agent's cursor and all state live in the log, so resuming is just re-running the step. While it waits, that agent's coroutine is idle at zero token cost and other agents keep ticking (asyncio). Keep it small: a retry wrapper around the subprocess call with a sane cap (e.g. bounded retries / max wait), leaving the loop and kernel untouched. The *coordinated* multi-agent version (pause the whole fleet on a shared limit) is a Phase 1 rail — see arch §9 Phase 1. This deliberately sits *inside* `step()`, not the T7 `asyncio.wait_for` demo timeout, which does the opposite (fail-fast). Mark the deferred ceiling with a `ponytail:` comment.
 
 ### T6 — `observability/tracing.py` (second risk center — not plumbing)
 - OTel → **local self-hosted Langfuse** — point `.env` at the existing local instance (host URL + keys). Don't add the heavy 4-container stack to this compose file; reuse what's already running.

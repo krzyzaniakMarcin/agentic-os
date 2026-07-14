@@ -464,6 +464,7 @@ agentic-os/
 - `kernel/orchestrator.py`: spawn loops + rails, with **quiescence that excludes mid-step agents and a per-session `max_turns` rail (§3.1)**.
 - `topologies/supervisor.yaml`: supervisor + worker on one task, coordinating only through the log.
 - Exercise the **claim protocol** with two workers of the same role — confirm lowest-id-wins prevents duplicate work (§4).
+- **Rate-limit backpressure (fleet-wide):** the single-agent wait-and-resume shipped in Phase 0's `claude_code.py` (an agent that hits an API/usage limit sleeps to reset, then resumes from its cursor) becomes a **kernel rail** here: on a shared limit the orchestrator pauses the affected agents (or the whole fleet) and resumes them together on reset, rather than each agent retrying blind. This is coordination policy — it belongs in the rails alongside the `usd_budget`/`max_turns` rails, not in the substrate. Cheap because state is in the log: pausing = stop ticking, resuming = re-spawn the loop at the saved cursor.
 - **Exit criterion:** the agents solve a task with zero direct calls between them; the log fully explains the episode **and records it replayably** (playback engine is Phase 3).
 
 ### Phase 2 — prove the substrate: heterogeneity, KB, second topology (week 2)
