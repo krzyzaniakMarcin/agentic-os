@@ -87,3 +87,23 @@ def test_step_span_records_identity_window_and_usage(monkeypatch):
     assert rec.attributes["step_n"] == 3
     assert list(rec.attributes["saw_events"]) == [10, 12]
     assert rec.attributes["usage.tokens"] == 7
+
+
+def test_shutdown_tracing_noop_when_unconfigured(monkeypatch):
+    # No provider stored -> must not raise.
+    monkeypatch.setattr(tracing, "_provider", None)
+    tracing.shutdown_tracing()  # no error == pass
+
+
+def test_shutdown_tracing_flushes_provider(monkeypatch):
+    class FakeProvider:
+        def __init__(self):
+            self.shutdown_called = False
+
+        def shutdown(self):
+            self.shutdown_called = True
+
+    fake = FakeProvider()
+    monkeypatch.setattr(tracing, "_provider", fake)
+    tracing.shutdown_tracing()
+    assert fake.shutdown_called is True
