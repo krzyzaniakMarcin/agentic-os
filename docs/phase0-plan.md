@@ -72,6 +72,7 @@
 ### T7 — `scripts/run_phase0.py` (throwaway)
 - Emit `run.start` + one seed `task.created`; start one `run_agent`; wait for `run.complete` **under an `asyncio.wait_for` timeout** so a wedged agent doesn't hang the demo forever; dump the `events` table.
 - **First live `claude -p` run:** T5's real subprocess runner (`_run_claude`) is only unit-tested against a fake in T5 — this demo is where it runs for real, validating the CLI + `config/claude/.mcp.json` + OTel wiring end to end. If it breaks, the fix is here, not in T5's tests.
+  - **Verify first:** (1) `claude` propagates the subprocess env (`AGENT_NAME`/`RUN_ID`) down to the stdio MCP child — the whole server-side identity model rides on it; emit one event and check the stamped `agent` column. (2) `config/claude/.mcp.json` uses bare `command: "python"`, resolved via the `claude` process's `PATH` — confirm it hits the editable-installed interpreter that can import `substrate` (pin the interpreter / set `cwd` if not). (3) `-p` + `--mcp-config` + `--allowedTools` loads the server without a trust/permission prompt.
 - Absorbed by `orchestrator.py` in P1.
 
 ### T8 — Langfuse self-host in `docker-compose.yml` ✅ done

@@ -64,6 +64,11 @@ class ClaudeCodeAgent(Agent):
             result = await self._runner(prompt, env)
             wait = _rate_limit_wait_s(result, time.time())
             if wait is None or attempt == _MAX_RETRIES:
+                # ponytail: non-limit errors (auth, invalid request, bad model
+                # turn) return here and the loop advances the cursor past the
+                # triggering events with no run.complete emitted — a silent
+                # drop, acceptable for the P0 demo. Surface them via the log
+                # (an error event / harness signal) if agents must recover.
                 return result  # success, non-limit error, or out of retries
             await asyncio.sleep(wait)  # idle at zero token cost; cursor lives in the log
 
