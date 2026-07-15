@@ -263,7 +263,7 @@ async def test_loop_emits_step_span_with_usage(monkeypatch):
     assert rec.attributes["step_n"] == 1
     assert list(rec.attributes["saw_events"]) == [10, 12]
     assert rec.attributes["usage.tokens"] == 7  # _FakeAgent returns {"tokens": 7}
-    assert "langfuse.observation.output" not in rec.attributes  # emits=[] -> no output
+    assert rec.attributes["langfuse.observation.output"] == "[]"  # emits=[] -> empty array
 
 
 async def test_loop_step_span_records_emitted_output(monkeypatch):

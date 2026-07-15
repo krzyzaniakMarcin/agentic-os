@@ -30,7 +30,7 @@ async def run_agent(agent: Agent, cursor: int = 0) -> None:
             emitted, usage = await agent.step(events)
             span.set_attributes(tracing.usage_attrs(usage))
             span.set_attributes(tracing.generation_attrs(usage))  # Tokens/Cost columns
-            if emitted and span.is_recording():  # [] for the CC runtime; real for others
+            if span.is_recording():  # [] for the CC runtime; real emits for others
                 span.set_attribute("langfuse.observation.output", json.dumps(
                     [{"type": e.type, "payload": e.payload,
                       "reply_to": e.reply_to, "correlation": e.correlation}
