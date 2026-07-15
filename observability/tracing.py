@@ -12,11 +12,12 @@ Two jobs (arch §3.4, phase0-plan T6):
 2. Instrumentation: `step_span()`, wrapped by the poll loop around
    `agent.step()`.
 
-ponytail: `configure_tracing()`'s live call site is T7's run_phase0.py (the
-process entrypoint) — global tracing config belongs at startup, not in the
-per-agent loop. Until T7 runs it live, step_span() is a cheap no-op and the
-OTLP export path is unproven (same deferral as T5's `_run_claude`). Upgrade
-path: T7 calls configure_tracing() once before starting run_agent.
+ponytail: `configure_tracing()`'s live call site is the orchestrator's main()
+(kernel/orchestrator.py, the process entrypoint) — global tracing config
+belongs at startup, not in the per-agent loop. Until it runs live, step_span()
+is a cheap no-op and the OTLP export path is unproven (same deferral as T5's
+`_run_claude`). Upgrade path: the orchestrator calls configure_tracing() once
+before starting run_agent.
 """
 import base64
 import json
@@ -36,7 +37,7 @@ _SERVICE_NAME = "agentic-os"
 _tracer = trace.get_tracer(__name__)
 
 # Kept so shutdown_tracing() can force-flush pending spans before a short
-# process (T7's run_phase0.py) exits and drops them. None until configured.
+# process (the orchestrator) exits and drops them. None until configured.
 _provider: TracerProvider | None = None
 
 
