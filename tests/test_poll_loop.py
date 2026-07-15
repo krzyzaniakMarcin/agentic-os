@@ -224,3 +224,42 @@ async def test_loop_records_agent_step_against_real_log():
     assert step["payload"]["saw_events"] == [seed["id"], seed["id"]]
     assert step["payload"]["step_n"] == 1
     assert step["payload"]["usage"] == {"tokens": 3}
+
+
+def _capture_step_spans(monkeypatch):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+    from observability import tracing
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(tracing, "_tracer", provider.get_tracer("test"))
+    return exporter
+
+
+async def test_loop_emits_step_span_with_usage(monkeypatch):
+    exporter = _capture_step_spans(monkeypatch)
+
+    async def fake_read(**kw):
+        return [{"id": 10}, {"id": 12}]
+
+    async def fake_emit(*a, **k):
+        return {"id": 1, "ts": 0.0}
+
+    monkeypatch.setattr(log, "read_events", fake_read)
+    monkeypatch.setattr(log, "emit", fake_emit)
+
+    a = _FakeAgent(Role(name="worker", subscribes_to=["task.created"]),
+                   run_id="r1", emits=[])
+    await poll_loop.run_agent(a)
+
+    (rec,) = exporter.get_finished_spans()
+    assert rec.name == "agent.step"
+    assert rec.attributes["agent"] == "worker"
+    assert rec.attributes["step_n"] == 1
+    assert list(rec.attributes["saw_events"]) == [10, 12]
+    assert rec.attributes["usage.tokens"] == 7  # _FakeAgent returns {"tokens": 7}
