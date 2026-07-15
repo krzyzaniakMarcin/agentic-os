@@ -263,3 +263,30 @@ async def test_loop_emits_step_span_with_usage(monkeypatch):
     assert rec.attributes["step_n"] == 1
     assert list(rec.attributes["saw_events"]) == [10, 12]
     assert rec.attributes["usage.tokens"] == 7  # _FakeAgent returns {"tokens": 7}
+    assert rec.attributes["langfuse.observation.output"] == "[]"  # emits=[] -> empty array
+
+
+async def test_loop_step_span_records_emitted_output(monkeypatch):
+    import json
+
+    exporter = _capture_step_spans(monkeypatch)
+
+    async def fake_read(**kw):
+        return [{"id": 10}, {"id": 12}]
+
+    async def fake_emit(*a, **k):
+        return {"id": 1, "ts": 0.0}
+
+    monkeypatch.setattr(log, "read_events", fake_read)
+    monkeypatch.setattr(log, "emit", fake_emit)
+
+    # A runtime that returns real emits (Emit dataclasses) must serialize cleanly.
+    a = _FakeAgent(Role(name="worker", subscribes_to=["task.created"]),
+                   run_id="r1", emits=[Emit("claim.made", {"answer": 42})])
+    await poll_loop.run_agent(a)
+
+    (rec,) = exporter.get_finished_spans()
+    assert json.loads(rec.attributes["langfuse.observation.output"]) == [
+        {"type": "claim.made", "payload": {"answer": 42},
+         "reply_to": None, "correlation": None}
+    ]
