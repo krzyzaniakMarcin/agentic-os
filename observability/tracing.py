@@ -34,6 +34,10 @@ _SERVICE_NAME = "agentic-os"
 # call trace.set_tracer_provider() (global mutation) — tests set _tracer.
 _tracer = trace.get_tracer(__name__)
 
+# Kept so shutdown_tracing() can force-flush pending spans before a short
+# process (T7's run_phase0.py) exits and drops them. None until configured.
+_provider: TracerProvider | None = None
+
 
 def _langfuse_otlp_config(host: str, public_key: str, secret_key: str) -> tuple[str, dict]:
     """(base_endpoint, headers) for Langfuse's OTLP receiver.
@@ -51,7 +55,7 @@ def configure_tracing() -> bool:
 
     No-op returning False when LANGFUSE_* keys are absent (local dev / tests).
     """
-    global _tracer
+    global _tracer, _provider
     host = os.environ.get("LANGFUSE_HOST")
     pk = os.environ.get("LANGFUSE_PUBLIC_KEY")
     sk = os.environ.get("LANGFUSE_SECRET_KEY")
@@ -74,6 +78,7 @@ def configure_tracing() -> bool:
         BatchSpanProcessor(OTLPSpanExporter(endpoint=base + "/v1/traces", headers=headers))
     )
     _tracer = provider.get_tracer(__name__)
+    _provider = provider
     return True
 
 
@@ -99,3 +104,14 @@ def step_span(agent_name: str, run_id: str, step_n: int, saw: list):
         span.set_attribute("step_n", step_n)
         span.set_attribute("saw_events", saw)
         yield span
+
+
+def shutdown_tracing() -> None:
+    """Force-flush pending step spans to Langfuse and stop the exporter.
+
+    BatchSpanProcessor exports on a delay, so a short-lived process can exit
+    before the last spans are sent. provider.shutdown() flushes synchronously.
+    No-op when configure_tracing() never installed a provider (local/tests).
+    """
+    if _provider is not None:
+        _provider.shutdown()
