@@ -6,9 +6,10 @@ claim.made / run.complete through the substrate MCP (identity stamped
 server-side from AGENT_NAME/RUN_ID, T3), so step() returns emits=[] (T4).
 
 The subprocess call is injectable (`runner`) so tests use a fake. The real
-`claude -p` path (`_run_claude`) is FIRST EXERCISED LIVE IN T7
-(scripts/run_phase0.py) — it is unproven until then. Do not drop the T7 live
-run: it validates the CLI + MCP wiring this module only stubs in tests.
+`claude -p` path (`_run_claude`) is FIRST EXERCISED LIVE by the orchestrator
+(kernel/orchestrator.py, which absorbed T7's run_phase0) — it is unproven until
+then. Do not drop that live run: it validates the CLI + MCP wiring this module
+only stubs in tests.
 """
 import asyncio
 import json
@@ -114,8 +115,9 @@ def _rate_limit_wait_s(result: dict, now: float) -> float | None:
 
 
 async def _run_claude(prompt: str, env: dict) -> dict:
-    """Real subprocess. FIRST LIVE invocation happens in T7 — tests inject a
-    fake runner, so this path is unproven until scripts/run_phase0.py runs it."""
+    """Real subprocess. FIRST LIVE invocation happens via the orchestrator —
+    tests inject a fake runner, so this path is unproven until
+    kernel/orchestrator.py runs it live."""
     proc = await asyncio.create_subprocess_exec(
         "claude", "-p", prompt,
         "--output-format", "json",

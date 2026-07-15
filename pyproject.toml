@@ -18,7 +18,8 @@ dependencies = [
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "python-dotenv>=1"]
 
 [tool.setuptools]
-packages = ["substrate", "agent", "agent.runtimes", "observability"]
+packages = ["substrate", "agent", "agent.runtimes", "observability", "kernel"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["."]  # flat layout: put repo root on sys.path so `uv run pytest` imports agent/substrate/kernel

@@ -30,7 +30,7 @@
 
 ## Task list
 
-### T10 — `kernel/orchestrator.py` (the dumb kernel — risk center)
+### T10 — `kernel/orchestrator.py` (the dumb kernel — risk center) ✅ done
 - `run_episode(cfg)` (§6): emit `run.start` + one seed `task.created`, build one `ClaudeCodeAgent` per role from the config, `asyncio.create_task(run_agent(a))` per agent, then run the supervise loop.
 - **Supervise rails, nothing more (§3.1):** each tick check `budget.breached()` (T12); on breach emit `system.halt` and `a.stop()` every agent. The kernel does **not** decide who works next, summarize, or route by content — routing is purely the `types` filter carried by each loop.
 - **Detect termination (T11):** `run.complete` **or** quiescence; on either, stop all agents and break.
