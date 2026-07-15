@@ -29,7 +29,7 @@ services:
       - ./:/app
       - ./config/claude:/root/.claude   # clean checked-in CLI config, NOT personal ~/.claude
     # -m form so /app (not /app/scripts) is on sys.path and the app packages import
-    command: ["python", "-m", "scripts.run_phase0"]
+    command: ["python", "-m", "kernel.orchestrator"]
 
 volumes:
   pgdata: {}
