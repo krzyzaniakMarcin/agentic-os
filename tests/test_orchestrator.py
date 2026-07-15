@@ -85,3 +85,22 @@ async def test_budget_breach_halts_and_stops_all(monkeypatch):
     halt = [e for e in events if e["type"] == "system.halt"]
     assert halt and halt[0]["payload"]["reason"] == "usd_budget"
     assert captured and all(a.stopped for a in captured)
+
+
+async def test_wall_clock_timeout_halts(monkeypatch):
+    # No budget in cfg → the wall-clock rail is the sole termination guard for
+    # a run whose model never emits run.complete (the docker demo path).
+    _install_memory_log(monkeypatch)
+
+    async def fake_runner(prompt, env):  # never emits run.complete
+        return {"usage": {}}
+
+    monkeypatch.setattr(claude_code, "_run_claude", fake_runner)
+
+    cfg = {"goal": "g",
+           "roles": [{"name": "w", "subscribes_to": ["task.created"], "prompt": "p"}],
+           "run_timeout_s": 0.0, "tick_s": 0.0}
+    events = await orchestrator.run_episode(cfg)
+
+    halt = [e for e in events if e["type"] == "system.halt"]
+    assert halt and halt[0]["payload"]["reason"] == "timeout"

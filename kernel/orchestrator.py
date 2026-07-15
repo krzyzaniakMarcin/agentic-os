@@ -54,6 +54,11 @@ async def _drain(tasks: list[asyncio.Task]) -> None:
             t.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await t
+        except Exception:
+            # ponytail: a crashed poll loop must not abort teardown or lose the
+            # run's projection — swallow so summarize() still returns. Surface it
+            # as an error event once the kernel has a failure channel (T11+).
+            pass
 
 
 async def run_episode(cfg: dict, *, run_id: str | None = None) -> list[dict]:
