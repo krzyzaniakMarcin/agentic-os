@@ -49,6 +49,12 @@ class ClaudeCodeAgent(Agent):
         env = dict(os.environ)  # inherit ANTHROPIC_API_KEY + any OTEL_* set by T6
         env["AGENT_NAME"] = self.name  # MCP server stamps the emitter from this (T3)
         env["RUN_ID"] = self.run_id
+        # Claude Code's own OTel export → Langfuse OTLP gives per-model/per-tool
+        # spans INSIDE the subprocess (T6 owns the endpoint/creds config in the
+        # environment; T5 only turns telemetry on when an endpoint is present —
+        # without this you get one span per step, not per call).
+        if env.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            env.setdefault("CLAUDE_CODE_ENABLE_TELEMETRY", "1")
         return env
 
     async def _invoke_with_retry(self, prompt: str, env: dict) -> dict:
@@ -60,7 +66,6 @@ class ClaudeCodeAgent(Agent):
             if wait is None or attempt == _MAX_RETRIES:
                 return result  # success, non-limit error, or out of retries
             await asyncio.sleep(wait)  # idle at zero token cost; cursor lives in the log
-        return result  # unreachable; loop always returns inside
 
 
 def _build_prompt(role_prompt: str, new_events: list[dict]) -> str:
@@ -91,12 +96,15 @@ def _rate_limit_wait_s(result: dict, now: float) -> float | None:
     etype = err.get("type") or result.get("subtype") or ""
     if "rate_limit" not in etype and "overloaded" not in etype:
         return None
-    if "retry_after" in err:
-        wait = float(err["retry_after"])
-    elif "reset_at" in err:
-        wait = float(err["reset_at"]) - now
-    else:
-        wait = _DEFAULT_BACKOFF_S
+    try:
+        if "retry_after" in err:
+            wait = float(err["retry_after"])
+        elif "reset_at" in err:
+            wait = float(err["reset_at"]) - now
+        else:
+            wait = _DEFAULT_BACKOFF_S
+    except (TypeError, ValueError):
+        wait = _DEFAULT_BACKOFF_S  # ponytail: schema unverified until T7 — degrade, don't crash
     return min(max(0.0, wait), _MAX_WAIT_S)
 
 

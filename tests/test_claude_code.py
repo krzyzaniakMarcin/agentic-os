@@ -131,3 +131,33 @@ async def test_step_gives_up_after_cap(monkeypatch):
 
     assert len(calls) == _MAX_RETRIES + 1  # initial try + capped retries
     assert emits == []  # still returns cleanly (usage from the limit result)
+
+
+def test_rate_limit_wait_s_non_numeric_reset_uses_backoff():
+    from agent.runtimes.claude_code import _DEFAULT_BACKOFF_S
+    r = {"is_error": True, "error": {"type": "rate_limit_error", "reset_at": "2026-07-15T00:00:00Z"}}
+    assert _rate_limit_wait_s(r, now=1000.0) == _DEFAULT_BACKOFF_S
+
+
+def test_subprocess_env_stamps_identity(monkeypatch):
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    a = ClaudeCodeAgent(_role(name="solver"), run_id="run-9")
+    env = a._subprocess_env()
+    assert env["AGENT_NAME"] == "solver"
+    assert env["RUN_ID"] == "run-9"
+
+
+def test_subprocess_env_enables_telemetry_when_otlp_set(monkeypatch):
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://langfuse-web:3000/api/public/otel")
+    monkeypatch.delenv("CLAUDE_CODE_ENABLE_TELEMETRY", raising=False)
+    a = ClaudeCodeAgent(_role(), run_id="r1")
+    env = a._subprocess_env()
+    assert env["CLAUDE_CODE_ENABLE_TELEMETRY"] == "1"
+
+
+def test_subprocess_env_no_telemetry_without_otlp(monkeypatch):
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_ENABLE_TELEMETRY", raising=False)
+    a = ClaudeCodeAgent(_role(), run_id="r1")
+    env = a._subprocess_env()
+    assert "CLAUDE_CODE_ENABLE_TELEMETRY" not in env
