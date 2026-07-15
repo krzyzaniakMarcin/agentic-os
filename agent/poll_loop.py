@@ -4,6 +4,7 @@ unless see_own_events), invoke step() only when there's something to react to,
 forward emits, and record one agent.step (saw_events + usage) for replay/cost.
 While idle it costs zero tokens."""
 import asyncio
+import json
 
 from agent.base import Agent
 from observability import tracing
@@ -29,6 +30,11 @@ async def run_agent(agent: Agent, cursor: int = 0) -> None:
             emitted, usage = await agent.step(events)
             span.set_attributes(tracing.usage_attrs(usage))
             span.set_attributes(tracing.generation_attrs(usage))  # Tokens/Cost columns
+            if emitted and span.is_recording():  # [] for the CC runtime; real for others
+                span.set_attribute("langfuse.observation.output", json.dumps(
+                    [{"type": e.type, "payload": e.payload,
+                      "reply_to": e.reply_to, "correlation": e.correlation}
+                     for e in emitted], default=str))
         for e in emitted:  # inert for the CC runtime (emits=[]); real for others
             await log.emit(
                 agent.name, e.type, e.payload, run_id=agent.run_id,
