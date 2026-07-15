@@ -41,3 +41,49 @@ def test_configure_tracing_publishes_otel_env_for_subprocess(monkeypatch):
     )
     b64 = base64.b64encode(b"pk-lf-abc:sk-lf-xyz").decode()
     assert tracing.os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == f"Authorization=Basic {b64}"
+
+
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
+
+
+def _capture_spans(monkeypatch):
+    """Point tracing._tracer at an in-memory exporter; return the exporter."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(tracing, "_tracer", provider.get_tracer("test"))
+    return exporter
+
+
+def test_usage_attrs_keeps_primitives_and_prefixes():
+    attrs = tracing.usage_attrs(
+        {"input_tokens": 10, "total_cost_usd": 0.02, "model": "opus",
+         "nested": {"x": 1}, "missing": None}
+    )
+    assert attrs == {
+        "usage.input_tokens": 10,
+        "usage.total_cost_usd": 0.02,
+        "usage.model": "opus",
+    }
+
+
+def test_usage_attrs_on_empty():
+    assert tracing.usage_attrs({}) == {}
+
+
+def test_step_span_records_identity_window_and_usage(monkeypatch):
+    exporter = _capture_spans(monkeypatch)
+    with tracing.step_span("worker", "r1", 3, [10, 12]) as span:
+        span.set_attributes(tracing.usage_attrs({"tokens": 7}))
+
+    (rec,) = exporter.get_finished_spans()
+    assert rec.name == "agent.step"
+    assert rec.attributes["agent"] == "worker"
+    assert rec.attributes["run_id"] == "r1"
+    assert rec.attributes["step_n"] == 3
+    assert list(rec.attributes["saw_events"]) == [10, 12]
+    assert rec.attributes["usage.tokens"] == 7

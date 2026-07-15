@@ -6,6 +6,7 @@ While idle it costs zero tokens."""
 import asyncio
 
 from agent.base import Agent
+from observability import tracing
 from substrate import log
 
 
@@ -22,7 +23,9 @@ async def run_agent(agent: Agent, cursor: int = 0) -> None:
             await asyncio.sleep(agent.tick_s)
             continue
         saw = [events[0]["id"], events[-1]["id"]]
-        emitted, usage = await agent.step(events)
+        with tracing.step_span(agent.name, agent.run_id, agent.step_n + 1, saw) as span:
+            emitted, usage = await agent.step(events)
+            span.set_attributes(tracing.usage_attrs(usage))
         for e in emitted:  # inert for the CC runtime (emits=[]); real for others
             await log.emit(
                 agent.name, e.type, e.payload, run_id=agent.run_id,

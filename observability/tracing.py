@@ -20,6 +20,7 @@ path: T7 calls configure_tracing() once before starting run_agent.
 """
 import base64
 import os
+from contextlib import contextmanager
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -74,3 +75,27 @@ def configure_tracing() -> bool:
     )
     _tracer = provider.get_tracer(__name__)
     return True
+
+
+def usage_attrs(usage: dict) -> dict:
+    """Usage dict -> span attributes (primitives only, `usage.`-prefixed).
+
+    OTel attribute values must be primitives (or homogeneous sequences), so
+    nested dicts / None are dropped rather than crashing the span.
+    """
+    return {
+        f"usage.{k}": v
+        for k, v in usage.items()
+        if isinstance(v, (int, float, str, bool))
+    }
+
+
+@contextmanager
+def step_span(agent_name: str, run_id: str, step_n: int, saw: list):
+    """Span around one agent.step(); yields the span for post-hoc usage attrs."""
+    with _tracer.start_as_current_span("agent.step") as span:
+        span.set_attribute("agent", agent_name)
+        span.set_attribute("run_id", run_id)
+        span.set_attribute("step_n", step_n)
+        span.set_attribute("saw_events", saw)
+        yield span
