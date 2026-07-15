@@ -21,6 +21,15 @@ from agent.role import Role
 # repo-root-relative so it works regardless of CWD (agent/runtimes/ → ../../).
 _MCP_CONFIG = Path(__file__).resolve().parents[2] / "config" / "claude" / ".mcp.json"
 
+# ponytail: bounded single-agent rate-limit wait-and-resume. Fixed retry cap +
+# max wait is enough for one coroutine — while it sleeps it costs zero tokens
+# and other agents keep ticking (asyncio). The COORDINATED fleet-wide version
+# (pause the whole fleet on a shared limit) is a Phase 1 rail (arch §9);
+# upgrade path: replace this per-agent sleep with a shared limit rail.
+_MAX_RETRIES = 5
+_MAX_WAIT_S = 3600.0
+_DEFAULT_BACKOFF_S = 60.0
+
 
 class ClaudeCodeAgent(Agent):
     """Stateless per-step `claude -p`. Returns usage only; emits=[] (arch §6)."""
@@ -33,7 +42,7 @@ class ClaudeCodeAgent(Agent):
     async def step(self, new_events: list[dict]) -> tuple[list, dict]:
         prompt = _build_prompt(self.prompt, new_events)
         env = self._subprocess_env()
-        result = await self._runner(prompt, env)
+        result = await self._invoke_with_retry(prompt, env)
         return [], _parse_usage(result)
 
     def _subprocess_env(self) -> dict:
@@ -41,6 +50,17 @@ class ClaudeCodeAgent(Agent):
         env["AGENT_NAME"] = self.name  # MCP server stamps the emitter from this (T3)
         env["RUN_ID"] = self.run_id
         return env
+
+    async def _invoke_with_retry(self, prompt: str, env: dict) -> dict:
+        import time
+
+        for attempt in range(_MAX_RETRIES + 1):
+            result = await self._runner(prompt, env)
+            wait = _rate_limit_wait_s(result, time.time())
+            if wait is None or attempt == _MAX_RETRIES:
+                return result  # success, non-limit error, or out of retries
+            await asyncio.sleep(wait)  # idle at zero token cost; cursor lives in the log
+        return result  # unreachable; loop always returns inside
 
 
 def _build_prompt(role_prompt: str, new_events: list[dict]) -> str:
@@ -56,6 +76,28 @@ def _parse_usage(result: dict) -> dict:
     if "total_cost_usd" in result:
         usage["total_cost_usd"] = result["total_cost_usd"]
     return usage
+
+
+def _rate_limit_wait_s(result: dict, now: float) -> float | None:
+    """Seconds to wait before re-running the step, or None if not rate-limited.
+
+    ponytail: the exact shape of a `claude -p` rate-limit result is verified
+    live in T7. This tolerantly checks the likely fields (rate_limit/overloaded
+    error type; reset_at epoch or retry_after delta) and falls back to a fixed
+    backoff. Tighten the field names once T7 shows the real schema."""
+    if not result.get("is_error"):
+        return None
+    err = result.get("error") or {}
+    etype = err.get("type") or result.get("subtype") or ""
+    if "rate_limit" not in etype and "overloaded" not in etype:
+        return None
+    if "retry_after" in err:
+        wait = float(err["retry_after"])
+    elif "reset_at" in err:
+        wait = float(err["reset_at"]) - now
+    else:
+        wait = _DEFAULT_BACKOFF_S
+    return min(max(0.0, wait), _MAX_WAIT_S)
 
 
 async def _run_claude(prompt: str, env: dict) -> dict:
