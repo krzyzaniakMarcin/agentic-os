@@ -21,6 +21,9 @@ from substrate import log
 
 SEED_GOAL = "What is the capital of France?"
 RUN_TIMEOUT_S = 120.0
+# After run.complete, let the in-flight step() return so the loop records its
+# agent.step before we tear down — the exit criterion wants that record.
+DRAIN_TIMEOUT_S = 30.0
 
 WORKER_PROMPT = (
     "You are a worker agent in a multi-agent system. When you see a "
@@ -67,10 +70,13 @@ async def main() -> None:
     except asyncio.TimeoutError:
         print(f"TIMEOUT after {RUN_TIMEOUT_S}s — agent wedged, dumping anyway")
     finally:
-        agent.stop()
-        loop_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await loop_task
+        agent.stop()  # loop exits once the in-flight step() finishes + records agent.step
+        try:
+            await asyncio.wait_for(loop_task, timeout=DRAIN_TIMEOUT_S)
+        except asyncio.TimeoutError:  # wedged step — stop waiting and tear down
+            loop_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await loop_task
         tracing.shutdown_tracing()  # flush step spans to Langfuse before exit
         await _dump_events(run_id)
         await log.close()

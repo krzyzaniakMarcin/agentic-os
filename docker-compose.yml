@@ -28,7 +28,8 @@ services:
     volumes:
       - ./:/app
       - ./config/claude:/root/.claude   # clean checked-in CLI config, NOT personal ~/.claude
-    command: ["python", "scripts/run_phase0.py"]
+    # -m form so /app (not /app/scripts) is on sys.path and the app packages import
+    command: ["python", "-m", "scripts.run_phase0"]
 
 volumes:
   pgdata: {}
