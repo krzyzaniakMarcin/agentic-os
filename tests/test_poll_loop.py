@@ -290,3 +290,31 @@ async def test_loop_step_span_records_emitted_output(monkeypatch):
         {"type": "claim.made", "payload": {"answer": 42},
          "reply_to": None, "correlation": None}
     ]
+
+
+async def test_in_step_flag_set_during_step(monkeypatch):
+    # in-memory log with one subscribed event so step() runs exactly once
+    store = [{"id": 1, "run_id": "r", "agent": "seed", "type": "task.created", "payload": {}}]
+
+    async def fake_read(run_id, since_id=0, types=None, correlation=None, limit=50, exclude_agent=None):
+        return [e for e in store if e["id"] > since_id and (types is None or e["type"] in types)][:limit]
+
+    async def fake_emit(agent, type, payload, run_id, reply_to=None, correlation=None):
+        return {"id": 99, "ts": 0.0}
+
+    monkeypatch.setattr(log, "read_events", fake_read)
+    monkeypatch.setattr(log, "emit", fake_emit)
+
+    class Probe(Agent):
+        seen_in_step = None
+        async def step(self, new_events):
+            Probe.seen_in_step = self.in_step  # must be True mid-step
+            self.stop()
+            return [], {}
+
+    role = Role(name="w", subscribes_to=["task.created"], prompt="p")
+    agent = Probe(role, "r")
+    await poll_loop.run_agent(agent)
+
+    assert Probe.seen_in_step is True
+    assert agent.in_step is False  # cleared after the step

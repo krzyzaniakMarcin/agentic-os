@@ -27,7 +27,11 @@ async def run_agent(agent: Agent, cursor: int = 0) -> None:
         with tracing.step_span(
             agent.name, agent.run_id, agent.step_n + 1, saw, input_events=events
         ) as span:
-            emitted, usage = await agent.step(events)
+            agent.in_step = True
+            try:
+                emitted, usage = await agent.step(events)
+            finally:
+                agent.in_step = False
             span.set_attributes(tracing.usage_attrs(usage))
             span.set_attributes(tracing.generation_attrs(usage))  # Tokens/Cost columns
             if span.is_recording():  # [] for the CC runtime; real emits for others
