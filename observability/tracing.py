@@ -137,9 +137,9 @@ def step_span(agent_name: str, run_id: str, step_n: int, saw: list, input_events
         span.set_attribute("run_id", run_id)
         span.set_attribute("step_n", step_n)
         span.set_attribute("saw_events", saw)
-        if input_events is not None and span.is_recording():  # skip dumps on no-op spans
+        if span.is_recording():  # skip dumps on no-op spans; [] when no input given
             span.set_attribute(
-                "langfuse.observation.input", json.dumps(input_events, default=str)
+                "langfuse.observation.input", json.dumps(input_events or [], default=str)
             )
         yield span
 

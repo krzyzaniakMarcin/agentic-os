@@ -88,6 +88,7 @@ def test_step_span_records_identity_window_and_usage(monkeypatch):
     assert rec.attributes["step_n"] == 3
     assert list(rec.attributes["saw_events"]) == [10, 12]
     assert rec.attributes["usage.tokens"] == 7
+    assert rec.attributes["langfuse.observation.input"] == "[]"  # no input -> empty array
 
 
 def test_shutdown_tracing_noop_when_unconfigured(monkeypatch):
