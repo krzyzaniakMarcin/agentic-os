@@ -28,8 +28,7 @@ services:
     volumes:
       - ./:/app
       - ./config/claude:/root/.claude   # clean checked-in CLI config, NOT personal ~/.claude
-    # T7 swaps this for: python scripts/run_phase0.py
-    command: ["sleep", "infinity"]
+    command: ["python", "scripts/run_phase0.py"]
 
 volumes:
   pgdata: {}

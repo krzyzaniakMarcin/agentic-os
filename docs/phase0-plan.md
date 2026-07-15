@@ -69,7 +69,7 @@
 - **Honest Phase 0 scope:** step-level spans + `usage` from `tracing.py` guaranteed; per-tool-call spans come from the CC OTel export when it's wired. Exit criterion ("every step visible in Langfuse") is met by step-level; per-call is the stretch.
 - **Verify in the first hour of T6** that CC's OTel export actually emits *trace spans* (not only metrics/logs). If it's metrics/logs only, per-tool-call spans are unreachable via env vars — kill the stretch goal then, not after wiring endpoints.
 
-### T7 — `scripts/run_phase0.py` (throwaway)
+### T7 — `scripts/run_phase0.py` (throwaway) ✅ done
 - Emit `run.start` + one seed `task.created`; start one `run_agent`; wait for `run.complete` **under an `asyncio.wait_for` timeout** so a wedged agent doesn't hang the demo forever; dump the `events` table.
 - **First live `claude -p` run:** T5's real subprocess runner (`_run_claude`) is only unit-tested against a fake in T5 — this demo is where it runs for real, validating the CLI + `config/claude/.mcp.json` + OTel wiring end to end. If it breaks, the fix is here, not in T5's tests.
   - **Verify first:** (1) `claude` propagates the subprocess env (`AGENT_NAME`/`RUN_ID`) down to the stdio MCP child — the whole server-side identity model rides on it; emit one event and check the stamped `agent` column. (2) `config/claude/.mcp.json` uses bare `command: "python"`, resolved via the `claude` process's `PATH` — confirm it hits the editable-installed interpreter that can import `substrate` (pin the interpreter / set `cwd` if not). (3) `-p` + `--mcp-config` + `--allowedTools` loads the server without a trust/permission prompt.
