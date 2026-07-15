@@ -19,6 +19,7 @@ OTLP export path is unproven (same deferral as T5's `_run_claude`). Upgrade
 path: T7 calls configure_tracing() once before starting run_agent.
 """
 import base64
+import json
 import os
 from contextlib import contextmanager
 
@@ -95,14 +96,51 @@ def usage_attrs(usage: dict) -> dict:
     }
 
 
+def generation_attrs(usage: dict) -> dict:
+    """Usage dict -> Langfuse-recognized generation attributes.
+
+    Langfuse fills its Tokens/Cost columns only for spans it treats as a
+    `generation`, so map our raw usage onto the Langfuse keys (which take
+    precedence over the generic gen_ai.* convention). Returns {} when there's
+    no token/cost signal, so a modelless step (e.g. FunctionAgent) stays a
+    plain span.
+
+    ponytail: this marks the STEP span as the generation. If per-call
+    generation spans from the `claude -p` subprocess ever reach Langfuse (the
+    arch §3.4 "agent layer" stretch), usage would be double-counted up the
+    trace — move these attrs off the step onto the per-call spans then.
+    """
+    inp = usage.get("input_tokens")
+    out = usage.get("output_tokens")
+    cost = usage.get("total_cost_usd")
+    if inp is None and out is None and cost is None:
+        return {}
+    attrs = {"langfuse.observation.type": "generation"}
+    if inp is not None or out is not None:
+        attrs["langfuse.observation.usage_details"] = json.dumps(
+            {"input": inp or 0, "output": out or 0}
+        )
+    if cost is not None:
+        attrs["langfuse.observation.cost_details"] = json.dumps({"total": cost})
+    return attrs
+
+
 @contextmanager
-def step_span(agent_name: str, run_id: str, step_n: int, saw: list):
-    """Span around one agent.step(); yields the span for post-hoc usage attrs."""
+def step_span(agent_name: str, run_id: str, step_n: int, saw: list, input_events=None):
+    """Span around one agent.step(); yields the span for post-hoc usage attrs.
+
+    input_events (what the step saw) -> Langfuse Input column; ts values are
+    datetimes, so serialize with default=str.
+    """
     with _tracer.start_as_current_span("agent.step") as span:
         span.set_attribute("agent", agent_name)
         span.set_attribute("run_id", run_id)
         span.set_attribute("step_n", step_n)
         span.set_attribute("saw_events", saw)
+        if input_events is not None and span.is_recording():  # skip dumps on no-op spans
+            span.set_attribute(
+                "langfuse.observation.input", json.dumps(input_events, default=str)
+            )
         yield span
 
 

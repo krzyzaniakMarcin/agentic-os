@@ -1,5 +1,6 @@
 """T6 check: Langfuse OTLP config derivation + subprocess env inheritance."""
 import base64
+import json
 
 from observability import tracing
 
@@ -107,3 +108,32 @@ def test_shutdown_tracing_flushes_provider(monkeypatch):
     monkeypatch.setattr(tracing, "_provider", fake)
     tracing.shutdown_tracing()
     assert fake.shutdown_called is True
+
+
+def test_generation_attrs_maps_tokens_and_cost():
+    # Langfuse-recognized keys so the Tokens/Cost columns populate.
+    attrs = tracing.generation_attrs(
+        {"input_tokens": 10, "output_tokens": 4, "total_cost_usd": 0.02,
+         "cache_read_input_tokens": 3}
+    )
+    assert attrs["langfuse.observation.type"] == "generation"
+    assert json.loads(attrs["langfuse.observation.usage_details"]) == {
+        "input": 10, "output": 4
+    }
+    assert json.loads(attrs["langfuse.observation.cost_details"]) == {"total": 0.02}
+
+
+def test_generation_attrs_empty_without_usage():
+    # No tokens and no cost -> nothing to mark as a generation.
+    assert tracing.generation_attrs({}) == {}
+    assert tracing.generation_attrs({"model": "opus"}) == {}
+
+
+def test_step_span_sets_input_when_provided(monkeypatch):
+    exporter = _capture_spans(monkeypatch)
+    events = [{"id": 10, "type": "task.created", "payload": {"goal": "hi"}}]
+    with tracing.step_span("worker", "r1", 1, [10, 10], input_events=events):
+        pass
+
+    (rec,) = exporter.get_finished_spans()
+    assert json.loads(rec.attributes["langfuse.observation.input"]) == events

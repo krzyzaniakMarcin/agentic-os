@@ -23,9 +23,12 @@ async def run_agent(agent: Agent, cursor: int = 0) -> None:
             await asyncio.sleep(agent.tick_s)
             continue
         saw = [events[0]["id"], events[-1]["id"]]
-        with tracing.step_span(agent.name, agent.run_id, agent.step_n + 1, saw) as span:
+        with tracing.step_span(
+            agent.name, agent.run_id, agent.step_n + 1, saw, input_events=events
+        ) as span:
             emitted, usage = await agent.step(events)
             span.set_attributes(tracing.usage_attrs(usage))
+            span.set_attributes(tracing.generation_attrs(usage))  # Tokens/Cost columns
         for e in emitted:  # inert for the CC runtime (emits=[]); real for others
             await log.emit(
                 agent.name, e.type, e.payload, run_id=agent.run_id,
