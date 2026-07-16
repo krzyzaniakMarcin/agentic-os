@@ -12,6 +12,7 @@ dependencies = [
     "mcp>=1.2",
     "opentelemetry-sdk>=1.20",
     "opentelemetry-exporter-otlp-proto-http>=1.20",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
