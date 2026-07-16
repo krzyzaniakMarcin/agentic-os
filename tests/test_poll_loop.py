@@ -4,8 +4,9 @@ import uuid
 import pytest
 
 from agent import poll_loop
-from agent.base import Agent, Emit
+from agent.base import Agent, Emit, RateLimitError
 from agent.role import Role, load_role
+from kernel.rate_limit import ResumeGate
 from substrate import log
 
 
@@ -318,3 +319,63 @@ async def test_in_step_flag_set_during_step(monkeypatch):
 
     assert Probe.seen_in_step is True
     assert agent.in_step is False  # cleared after the step
+
+
+# Task 3: gate wiring + rate-limit drop
+
+
+class _RateClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    async def sleep(self, s):
+        self.t += s
+
+
+async def test_loop_pauses_and_replays_window_on_rate_limit(monkeypatch):
+    reads = []
+    step_events = []  # agent.step payloads that reached the log
+
+    async def fake_read(**kw):
+        reads.append(kw)
+        return [{"id": 3}, {"id": 5}]  # the SAME window every read
+
+    async def fake_emit(agent, type, payload, run_id, reply_to=None, correlation=None):
+        if type == "agent.step":
+            step_events.append(payload)
+        return {"id": 0, "ts": 0.0}
+
+    monkeypatch.setattr(log, "read_events", fake_read)
+    monkeypatch.setattr(log, "emit", fake_emit)
+
+    clock = _RateClock()
+    gate = ResumeGate(clock=clock.now, sleep=clock.sleep)
+
+    class _LimitThenOk(Agent):
+        def __init__(self, role, run_id):
+            super().__init__(role, run_id)
+            self.windows = []      # the window each step() saw
+            self._raised = False
+
+        async def step(self, new_events):
+            self.windows.append([e["id"] for e in new_events])
+            if not self._raised:
+                self._raised = True
+                raise RateLimitError(30.0)
+            self.stop()            # second attempt succeeds, then exit
+            return [], {"ok": True}
+
+    a = _LimitThenOk(Role(name="w", subscribes_to=["x"]), run_id="r1")
+    await poll_loop.run_agent(a, gate)
+
+    # step() ran twice on the SAME window; the throttled attempt was dropped whole.
+    assert a.windows == [[3, 5], [3, 5]]
+    assert a.step_n == 1                     # only the successful attempt counted
+    assert len(step_events) == 1             # no agent.step for the failed attempt
+    assert step_events[0]["step_n"] == 1
+    assert gate.paused_total_s() == 30.0     # the fleet actually paused
+    # cursor never advanced past the throttled window (second read starts at 0 too)
+    assert all(r["since_id"] == 0 for r in reads)

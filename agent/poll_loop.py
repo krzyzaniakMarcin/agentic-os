@@ -6,13 +6,15 @@ While idle it costs zero tokens."""
 import asyncio
 import json
 
-from agent.base import Agent
+from agent.base import Agent, RateLimitError
 from observability import tracing
 from substrate import log
 
 
-async def run_agent(agent: Agent, cursor: int = 0) -> None:
+async def run_agent(agent: Agent, gate=None, cursor: int = 0) -> None:
     while not agent.stopped:
+        if gate is not None:
+            await gate.wait()  # resume-gate: block while the fleet is throttled (T15)
         events = await log.read_events(
             run_id=agent.run_id,
             since_id=cursor,
@@ -24,21 +26,31 @@ async def run_agent(agent: Agent, cursor: int = 0) -> None:
             await asyncio.sleep(agent.tick_s)
             continue
         saw = [events[0]["id"], events[-1]["id"]]
-        with tracing.step_span(
-            agent.name, agent.run_id, agent.step_n + 1, saw, input_events=events
-        ) as span:
-            agent.in_step = True
-            try:
-                emitted, usage = await agent.step(events)
-            finally:
-                agent.in_step = False
-            span.set_attributes(tracing.usage_attrs(usage))
-            span.set_attributes(tracing.generation_attrs(usage))  # Tokens/Cost columns
-            if span.is_recording():  # [] for the CC runtime; real emits for others
-                span.set_attribute("langfuse.observation.output", json.dumps(
-                    [{"type": e.type, "payload": e.payload,
-                      "reply_to": e.reply_to, "correlation": e.correlation}
-                     for e in emitted], default=str))
+        try:
+            with tracing.step_span(
+                agent.name, agent.run_id, agent.step_n + 1, saw, input_events=events
+            ) as span:
+                agent.in_step = True
+                try:
+                    emitted, usage = await agent.step(events)
+                finally:
+                    agent.in_step = False
+                span.set_attributes(tracing.usage_attrs(usage))
+                span.set_attributes(tracing.generation_attrs(usage))  # Tokens/Cost columns
+                if span.is_recording():  # [] for the CC runtime; real emits for others
+                    span.set_attribute("langfuse.observation.output", json.dumps(
+                        [{"type": e.type, "payload": e.payload,
+                          "reply_to": e.reply_to, "correlation": e.correlation}
+                         for e in emitted], default=str))
+        except RateLimitError as e:
+            # Fleet throttled. Pause everyone and drop this attempt WHOLE: no
+            # agent.step, step_n/cursor unchanged, so the same window is
+            # re-delivered on resume (phase1-plan §T15). The coroutine stays alive
+            # across the pause, so the in-place window lives in this local, not the
+            # log — do not advance the cursor here.
+            if gate is not None:
+                gate.pause(e.wait_s)
+            continue
         for e in emitted:  # inert for the CC runtime (emits=[]); real for others
             await log.emit(
                 agent.name, e.type, e.payload, run_id=agent.run_id,
