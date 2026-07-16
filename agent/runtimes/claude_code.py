@@ -127,6 +127,7 @@ def _build_argv(prompt: str, max_budget_usd: float | None) -> list[str]:
         "claude", "-p", prompt,
         "--output-format", "json",
         "--mcp-config", str(_MCP_CONFIG),
+        # non-interactive tool use: let the model call only the substrate tools
         "--allowedTools", "mcp__substrate__emit_event,mcp__substrate__read_events",
     ]
     if max_budget_usd is not None:

@@ -14,8 +14,9 @@ class Role:
     tick_s: float = 0.5  # idle poll interval
     # ponytail: per-session runaway cap (T13). Guards ONE `claude -p` turn so a
     # subagent fanout can't blow the global usd_budget (T12) before the kernel
-    # reacts between steps. Default is generous headroom for the P0 single step;
-    # tune per-role via config. Raise/lower when real turn costs are known.
+    # reacts between steps. Keep this <= the run's usd_budget or the guard sits
+    # above the global and never trips first. Default is generous headroom for
+    # the P0 single step; tune per-role via config as real turn costs are known.
     max_budget_usd: float | None = 1.0
 
 
