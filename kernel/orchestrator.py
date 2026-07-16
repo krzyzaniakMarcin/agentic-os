@@ -2,9 +2,9 @@
 
 run_episode(cfg): emit run.start + one seed task.created, spawn one poll loop
 per role, then supervise RAILS ONLY — a budget breach becomes system.halt +
-stop; run.complete (T11 adds quiescence) stops the fleet. Returns a projection
-over the event log. Absorbs scripts/run_phase0.py: this module is the
-docker-compose `kernel` command (`python -m kernel.orchestrator`).
+stop; run.complete OR quiescence (kernel/termination.py, T11) stops the fleet.
+Returns a projection over the event log. Absorbs scripts/run_phase0.py: this
+module is the docker-compose `kernel` command (`python -m kernel.orchestrator`).
 
 The kernel never inspects event content or decides who works next — routing is
 purely the `types` filter each loop carries (arch §6). Rails, nothing more.
@@ -17,6 +17,7 @@ import uuid
 from agent import poll_loop
 from agent.role import load_role
 from agent.runtimes.claude_code import ClaudeCodeAgent
+from kernel import termination
 from observability import tracing
 from substrate import log
 
@@ -28,14 +29,9 @@ _DEFAULT_RUN_TIMEOUT_S = 300.0
 # Let the in-flight step() return so the loop records its agent.step before we
 # tear down — the exit criterion wants that record (P0 drain discipline).
 _DRAIN_TIMEOUT_S = 30.0
-
-
-async def _run_complete(run_id: str) -> bool:
-    """T10 termination seam: any run.complete ends the episode. T11 replaces
-    this call site with kernel/termination.terminated (adds quiescence + a
-    mid-step guard + the T15 resume-gate check)."""
-    done = await log.read_events(run_id=run_id, types=["run.complete"], limit=1)
-    return bool(done)
+# Backstop when no agent emits run.complete: end the run after this much idle
+# time (no events, nobody mid-step, fleet not paused). T14 configs may override.
+_DEFAULT_QUIESCENCE_S = 30.0
 
 
 async def summarize(run_id: str) -> list[dict]:
@@ -69,6 +65,9 @@ async def run_episode(cfg: dict, *, run_id: str | None = None) -> list[dict]:
 
     agents = [ClaudeCodeAgent(load_role(r), run_id) for r in cfg["roles"]]
     tasks = [asyncio.create_task(poll_loop.run_agent(a)) for a in agents]
+    term = termination.Terminator(
+        run_id, agents, cfg.get("quiescence_s", _DEFAULT_QUIESCENCE_S)
+    )
 
     budget = cfg.get("budget")  # T12 supplies an object with async breached()->str|None
     tick_s = cfg.get("tick_s", 0.5)
@@ -83,7 +82,7 @@ async def run_episode(cfg: dict, *, run_id: str | None = None) -> list[dict]:
             if timeout_s is not None and elapsed > timeout_s:
                 await log.emit("kernel", "system.halt", {"reason": "timeout"}, run_id=run_id)
                 break
-            if await _run_complete(run_id):  # T11 swaps in quiescence-aware terminated()
+            if await term.terminated():  # run.complete or quiescence (T11)
                 break
             await asyncio.sleep(tick_s)
     finally:

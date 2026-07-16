@@ -39,7 +39,7 @@
 - **Config dependency (T10 lands before T14's loader):** T10 builds agents from a hardcoded stub `cfg` dict (roles + seed + rails inline, mirroring `run_phase0.py`); T14 replaces the stub with the YAML loader. So T10 defines the `cfg` *shape* it consumes; T14 supplies the parser.
 - **Self-check:** with two fake agents (no model) and a stub cfg, `run_episode` spawns both loops, a seeded `run.complete` terminates the run, and `system.halt` fires when a forced budget breach is injected — assert both agents stopped and the halt event is in the log.
 
-### T11 — `kernel/termination.py` (quiescence — risk center)
+### T11 — `kernel/termination.py` (quiescence — risk center) ✅ done
 - Terminate on **`run.complete`** (any agent/kernel emits it) **or quiescence**: no new events for `quiescence_s` **and no agent currently mid-step** (§3.1). Excluding in-flight agents is the whole point — a Claude Code agent can be minutes into a tool-using turn without emitting; naive "no events for T seconds" fires mid-thought and truncates the run.
 - **The kernel owns the sessions, so it knows who is stepping.** Add a small `in_step` flag on `Agent` (`base.py`) set around the `await agent.step(...)` call in `poll_loop.py`; `terminated()` reads `any(a.in_step for a in agents)`. This is the only change to the P0 loop, and it's inert for P0's single-agent path.
 - Quiescence needs a "last event id / time" probe over the run — one cheap `read_events(since_id=last_seen, limit=1)` per tick, not a full scan.
