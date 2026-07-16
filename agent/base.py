@@ -15,6 +15,16 @@ class Emit:
     correlation: str | None = None
 
 
+class RateLimitError(Exception):
+    """Raised by step() when the runtime hits an API/usage limit. Carries wait_s
+    (seconds until the limit resets) so the poll loop pauses the whole fleet via
+    the resume-gate instead of the runtime sleeping alone (phase1-plan §T15)."""
+
+    def __init__(self, wait_s: float):
+        super().__init__(f"rate limited; resume in {wait_s:.0f}s")
+        self.wait_s = wait_s
+
+
 class Agent:
     def __init__(self, role: Role, run_id: str):
         self.name = role.name
