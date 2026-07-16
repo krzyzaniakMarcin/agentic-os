@@ -55,10 +55,11 @@
 - `system.halt` is only observed *between* steps — that's why T13 exists as a second, in-turn rail.
 - **Self-check:** feed synthetic `agent.step` events with known `total_cost_usd`; assert the running total trips `usd_budget` at the right point and survives >50 steps; assert a `system.kill` event and an elapsed `timeout_s` each trip with the correct reason; assert a step with no `total_cost_usd` counts as 0.
 
-### T13 — per-session `max_turns` rail in `claude_code.py` (§3.1)
-- Wire **`--max-turns`** (and a per-session cost cap if the CLI exposes one) onto the `claude -p` subprocess so a single runaway turn — native subagents fanning out — can't blow the global budget before the kernel reacts between steps.
-- Sourced from the role/run config (`max_turns` per role, sane default). Small change to the T5 runtime; the P0 single-agent path keeps working with the default.
-- **Self-check:** against the existing fake-subprocess harness used in T5's tests, assert the built `claude -p` argv carries `--max-turns <n>` from the role config and falls back to the default when unset.
+### T13 — per-session runaway cap in `claude_code.py` (§3.1) ✅ done
+- Wire a per-session cost cap onto the `claude -p` subprocess so a single runaway turn — native subagents fanning out — can't blow the global budget before the kernel reacts between steps.
+- **CLI reality:** `claude` 2.1.211 has **no `--max-turns`** flag; it exposes `--max-budget-usd <amount>` — the per-session cost cap this spec sanctioned as the alternative. That dollar cap is the rail (`Role.max_budget_usd`, default 1.0, per-role override). Swap in a turn-count flag here if one returns.
+- Sourced from the role/run config, sane default. Small change to the T5 runtime; the P0 single-agent path keeps working with the default.
+- **Self-check:** against the fake-subprocess harness, `_build_argv` carries `--max-budget-usd <n>` from role config (and omits it when `None`); the default runner binds `role.max_budget_usd` via `partial`, falling back to the default when unset.
 
 ### T14 — `topologies/supervisor.yaml` + run-config loader
 - Roles as **data** (`name`, `subscribes_to`, `emits`, `prompt`, `runtime`, optional `model`/`max_turns`) + seed task + rails (`usd_budget`, `timeout_s`, `quiescence_s`) — the run config the orchestrator loads. Extend `role.load_role` (already drops unknown keys) rather than a new parser.

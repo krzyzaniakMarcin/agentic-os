@@ -1,4 +1,6 @@
 """Agent role config (arch §6, §7): subscriptions + prompt drive one poll loop."""
+from __future__ import annotations
+
 from dataclasses import dataclass, field, fields
 
 
@@ -10,6 +12,11 @@ class Role:
     prompt: str = ""
     see_own_events: bool = False  # deliver the agent's own emissions back to it? (arch §6)
     tick_s: float = 0.5  # idle poll interval
+    # ponytail: per-session runaway cap (T13). Guards ONE `claude -p` turn so a
+    # subagent fanout can't blow the global usd_budget (T12) before the kernel
+    # reacts between steps. Default is generous headroom for the P0 single step;
+    # tune per-role via config. Raise/lower when real turn costs are known.
+    max_budget_usd: float | None = 1.0
 
 
 def load_role(data: dict) -> Role:

@@ -1,12 +1,15 @@
 """T5 check: Claude Code runtime — prompt build, usage parse, step contract,
 rate-limit wait-and-resume. No live `claude -p`; the runner is injected."""
 import pytest
+from functools import partial
 
 from agent.role import Role
 from agent.runtimes.claude_code import (
     ClaudeCodeAgent,
     _build_prompt,
     _parse_usage,
+    _build_argv,
+    _run_claude,
 )
 
 
@@ -161,3 +164,37 @@ def test_subprocess_env_no_telemetry_without_otlp(monkeypatch):
     a = ClaudeCodeAgent(_role(), run_id="r1")
     env = a._subprocess_env()
     assert "CLAUDE_CODE_ENABLE_TELEMETRY" not in env
+
+
+def test_build_argv_carries_max_budget():
+    argv = _build_argv("hello", max_budget_usd=2.5)
+    assert argv[:3] == ["claude", "-p", "hello"]
+    assert "--max-budget-usd" in argv
+    assert argv[argv.index("--max-budget-usd") + 1] == "2.5"
+
+
+def test_build_argv_omits_cap_when_none():
+    argv = _build_argv("hello", max_budget_usd=None)
+    assert "--max-budget-usd" not in argv
+    # baseline flags still present
+    assert "--output-format" in argv and "--mcp-config" in argv
+
+
+def test_agent_binds_role_cap_to_default_runner():
+    a = ClaudeCodeAgent(_role(), run_id="r1")  # no runner injected
+    assert isinstance(a._runner, partial)
+    assert a._runner.func is _run_claude
+    assert a._runner.keywords["max_budget_usd"] == 1.0  # Role default
+
+
+def test_agent_uses_explicit_role_cap():
+    role = Role(name="worker", subscribes_to=["task.created"], max_budget_usd=0.25)
+    a = ClaudeCodeAgent(role, run_id="r1")
+    assert a._runner.keywords["max_budget_usd"] == 0.25
+
+
+def test_injected_runner_seam_unchanged():
+    async def fake(prompt, env):  # (prompt, env) signature must still work
+        return {"usage": {}}
+    a = ClaudeCodeAgent(_role(), run_id="r1", runner=fake)
+    assert a._runner is fake

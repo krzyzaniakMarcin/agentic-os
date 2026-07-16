@@ -11,9 +11,12 @@ The subprocess call is injectable (`runner`) so tests use a fake. The real
 then. Do not drop that live run: it validates the CLI + MCP wiring this module
 only stubs in tests.
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import os
+from functools import partial
 from pathlib import Path
 
 from agent.base import Agent
@@ -38,7 +41,7 @@ class ClaudeCodeAgent(Agent):
     def __init__(self, role: Role, run_id: str, runner=None):
         super().__init__(role, run_id)
         self.prompt = role.prompt
-        self._runner = runner or _run_claude  # injectable; real subprocess by default
+        self._runner = runner or partial(_run_claude, max_budget_usd=role.max_budget_usd)
 
     async def step(self, new_events: list[dict]) -> tuple[list, dict]:
         prompt = _build_prompt(self.prompt, new_events)
@@ -114,16 +117,29 @@ def _rate_limit_wait_s(result: dict, now: float) -> float | None:
     return min(max(0.0, wait), _MAX_WAIT_S)
 
 
-async def _run_claude(prompt: str, env: dict) -> dict:
+def _build_argv(prompt: str, max_budget_usd: float | None) -> list[str]:
+    """The `claude -p` argv. Per-session cost cap (T13) is appended when set.
+
+    ponytail: the installed CLI (2.1.211) has no `--max-turns`; `--max-budget-usd`
+    is the per-session runaway rail the T13 spec allows as the cost-cap alternative.
+    Swap/extend here if a turn-count flag returns."""
+    argv = [
+        "claude", "-p", prompt,
+        "--output-format", "json",
+        "--mcp-config", str(_MCP_CONFIG),
+        "--allowedTools", "mcp__substrate__emit_event,mcp__substrate__read_events",
+    ]
+    if max_budget_usd is not None:
+        argv += ["--max-budget-usd", str(max_budget_usd)]
+    return argv
+
+
+async def _run_claude(prompt: str, env: dict, max_budget_usd: float | None = None) -> dict:
     """Real subprocess. FIRST LIVE invocation happens via the orchestrator —
     tests inject a fake runner, so this path is unproven until
     kernel/orchestrator.py runs it live."""
     proc = await asyncio.create_subprocess_exec(
-        "claude", "-p", prompt,
-        "--output-format", "json",
-        "--mcp-config", str(_MCP_CONFIG),
-        # non-interactive tool use: let the model call only the substrate tools
-        "--allowedTools", "mcp__substrate__emit_event,mcp__substrate__read_events",
+        *_build_argv(prompt, max_budget_usd),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
