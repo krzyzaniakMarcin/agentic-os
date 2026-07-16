@@ -21,6 +21,7 @@ from agent.runtimes.claude_code import ClaudeCodeAgent
 from kernel import budget as budget_mod
 from kernel import config
 from kernel import termination
+from kernel.rate_limit import ResumeGate
 from observability import tracing
 from substrate import log
 
@@ -65,16 +66,20 @@ async def run_episode(cfg: dict, *, run_id: str | None = None) -> list[dict]:
     await log.emit("kernel", "task.created", {"goal": goal}, run_id=run_id)
 
     agents = [ClaudeCodeAgent(load_role(r), run_id) for r in cfg["roles"]]
-    tasks = [asyncio.create_task(poll_loop.run_agent(a)) for a in agents]
+    gate = ResumeGate()  # one shared resume-gate: a limit pauses the whole fleet (T15)
+    tasks = [asyncio.create_task(poll_loop.run_agent(a, gate)) for a in agents]
     term = termination.Terminator(
-        run_id, agents, cfg.get("quiescence_s", _DEFAULT_QUIESCENCE_S)
+        run_id, agents, cfg.get("quiescence_s", _DEFAULT_QUIESCENCE_S),
+        paused=lambda: gate.paused,  # a closed gate counts as busy, not quiescence
     )
 
     # Injectable for tests; otherwise the real rail (usd + wall-clock + kill).
+    # paused_s lets the wall-clock exclude throttled time (T15).
     budget = cfg.get("budget") or budget_mod.Budget(
         run_id,
         usd_budget=cfg.get("usd_budget"),
         timeout_s=cfg.get("run_timeout_s", _DEFAULT_RUN_TIMEOUT_S),
+        paused_s=gate.paused_total_s,
     )
     tick_s = cfg.get("tick_s", 0.5)
     try:

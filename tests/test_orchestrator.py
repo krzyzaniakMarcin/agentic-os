@@ -3,6 +3,7 @@ dump. Uses an in-memory log double + a fake claude runner (no model)."""
 from agent.runtimes import claude_code
 from agent.runtimes.claude_code import ClaudeCodeAgent
 from kernel import orchestrator
+from kernel.rate_limit import ResumeGate
 from substrate import log
 
 
@@ -145,3 +146,44 @@ def test_main_loads_supervisor_topology(monkeypatch):
     names = {r["name"] for r in cfg["roles"]}
     assert names == {"supervisor", "worker"}
     assert cfg["goal"]  # seeded from the topology, not empty
+
+
+async def test_run_episode_shares_one_gate_across_loops_and_rails(monkeypatch):
+    _install_memory_log(monkeypatch)
+    captured = {"gates": [], "term_paused": None, "budget_paused_s": None}
+
+    async def fake_run_agent(agent, gate=None, cursor=0):
+        captured["gates"].append(gate)
+        agent.stop()
+
+    def fake_terminator(run_id, agents, quiescence_s, *, paused=None, **kw):
+        captured["term_paused"] = paused
+        class _T:
+            async def terminated(self):
+                return True
+        return _T()
+
+    real_budget = orchestrator.budget_mod.Budget
+
+    def spy_budget(run_id, *, paused_s=None, **kw):
+        captured["budget_paused_s"] = paused_s
+        return real_budget(run_id, paused_s=paused_s, **kw)
+
+    monkeypatch.setattr(orchestrator.poll_loop, "run_agent", fake_run_agent)
+    monkeypatch.setattr(orchestrator.termination, "Terminator", fake_terminator)
+    monkeypatch.setattr(orchestrator.budget_mod, "Budget", spy_budget)
+
+    cfg = {"goal": "g",
+           "roles": [{"name": "a", "subscribes_to": ["task.created"]},
+                     {"name": "b", "subscribes_to": ["task.created"]}],
+           "tick_s": 0.0}
+    await orchestrator.run_episode(cfg)
+
+    # Every loop got the SAME gate instance, and it's a real ResumeGate.
+    gates = captured["gates"]
+    assert len(gates) == 2
+    assert isinstance(gates[0], ResumeGate)
+    assert gates[0] is gates[1]
+    # Both rails observe that same gate.
+    assert captured["term_paused"]() is False        # gate open -> not paused
+    assert captured["budget_paused_s"] == gates[0].paused_total_s
