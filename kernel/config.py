@@ -26,7 +26,11 @@ def load_run_config(path: str | Path) -> dict:
         "goal": data["goal"],          # KeyError if absent — a run needs a seed task
         "roles": data["roles"],        # raw dicts; load_role drops unknown keys
     }
+    rails = data.get("rails") or {}
     for yaml_key, cfg_key in _RAILS_KEYS.items():
-        if yaml_key in (data.get("rails") or {}):
-            cfg[cfg_key] = data["rails"][yaml_key]
+        # `is not None` so an empty/null YAML value (e.g. `timeout_s:`) is
+        # omitted, not passed as None — otherwise it defeats run_episode's own
+        # `.get(key, default)` fallback and silently disables that rail.
+        if rails.get(yaml_key) is not None:
+            cfg[cfg_key] = rails[yaml_key]
     return cfg

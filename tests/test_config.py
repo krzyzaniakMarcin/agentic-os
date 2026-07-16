@@ -47,6 +47,15 @@ def test_absent_rails_are_omitted(tmp_path):
         assert k not in cfg
 
 
+def test_null_rails_value_is_omitted(tmp_path):
+    # An empty/null YAML value must be omitted, not passed as None, so
+    # run_episode's own `.get(key, default)` fallback still applies.
+    text = 'goal: "g"\nrails:\n  timeout_s:\n  usd_budget: 2.0\nroles:\n  - name: w\n    subscribes_to: [task.created]\n    prompt: "p"\n'
+    cfg = load_run_config(_write(tmp_path, text))
+    assert "run_timeout_s" not in cfg  # null timeout_s dropped, default applies
+    assert cfg["usd_budget"] == 2.0    # a real value still passes through
+
+
 def test_missing_goal_raises(tmp_path):
     text = 'roles:\n  - name: w\n    subscribes_to: [task.created]\n    prompt: "p"\n'
     import pytest
