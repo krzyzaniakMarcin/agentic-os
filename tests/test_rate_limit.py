@@ -1,5 +1,7 @@
 """T15 check: ResumeGate — shared fleet resume-gate. Manual clock/sleep, no I/O
 (mirrors tests/test_budget.py's Clock idiom)."""
+import asyncio
+
 from kernel.rate_limit import ResumeGate
 
 
@@ -62,3 +64,22 @@ async def test_paused_total_accrues_across_two_pauses():
     gate.pause(15.0)
     await gate.wait()
     assert gate.paused_total_s() == 35.0
+
+
+async def test_reopen_cancellation_releases_gate():
+    # A clock/sleep that blocks so the reopen task is mid-await when cancelled.
+    class _Blocking:
+        def __init__(self): self.t = 0.0
+        def now(self): return self.t
+        async def sleep(self, s): await asyncio.Event().wait()  # never returns
+    clk = _Blocking()
+    gate = ResumeGate(clock=clk.now, sleep=clk.sleep)
+    gate.pause(30.0)
+    assert gate.paused is True
+    await asyncio.sleep(0)          # let the reopen task start and block on sleep
+    gate._reopen_task.cancel()
+    try:
+        await gate._reopen_task
+    except asyncio.CancelledError:
+        pass
+    assert gate.paused is False     # finally released the gate

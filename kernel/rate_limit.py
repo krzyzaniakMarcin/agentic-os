@@ -5,13 +5,13 @@ loop, which closes this shared gate: every loop awaits gate.wait() at the top of
 its tick, so the WHOLE FLEET pauses. A single background task reopens the gate
 after wait_s. paused_total_s() lets the wall-clock rail (T12 Budget) exclude
 throttled time so a reset doesn't masquerade as a runaway.
-
-# ponytail: whole-fleet pause — one gate for every agent. Upgrade to per-limit-key
-(per-account) gates only if agents ever span multiple API keys (arch §9).
 """
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+
+# ponytail: whole-fleet pause — one gate for every agent. Upgrade to per-limit-key
+# (per-account) gates only if agents ever span multiple API keys (arch §9).
 
 _MAX_WAIT_S = 3600.0  # never hold the fleet longer than this on a bad reset value
 
@@ -55,8 +55,12 @@ class ResumeGate:
         self._reopen_task = asyncio.create_task(self._reopen())
 
     async def _reopen(self) -> None:
-        while (remaining := self._reopen_at - self._clock()) > 0:
-            await self._sleep(remaining)  # deadline may extend across iterations
-        self._paused_total += self._clock() - self._paused_since
-        self._paused_since = None
-        self._open.set()
+        try:
+            while (remaining := self._reopen_at - self._clock()) > 0:
+                await self._sleep(remaining)  # deadline may extend across iterations
+        finally:
+            # Always release the fleet, even on cancellation/error — a stuck-closed
+            # gate would hang every loop forever (T15).
+            self._paused_total += self._clock() - self._paused_since
+            self._paused_since = None
+            self._open.set()
