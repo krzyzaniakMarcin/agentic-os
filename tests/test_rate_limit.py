@@ -83,3 +83,25 @@ async def test_reopen_cancellation_releases_gate():
     except asyncio.CancelledError:
         pass
     assert gate.paused is False     # finally released the gate
+
+
+async def test_close_cancels_reopen_and_opens_gate():
+    # close() on a paused gate must cancel the pending reopen and reopen the gate
+    # so a teardown doesn't leave the reopen task sleeping.
+    class _Blocking:
+        def __init__(self): self.t = 0.0
+        def now(self): return self.t
+        async def sleep(self, s): await asyncio.Event().wait()  # never returns
+    clk = _Blocking()
+    gate = ResumeGate(clock=clk.now, sleep=clk.sleep)
+    gate.pause(30.0)
+    assert gate.paused is True
+    await asyncio.sleep(0)          # let the reopen task start and block on sleep
+    task = gate._reopen_task
+    gate.close()
+    try:
+        await task                  # drive the cancellation to completion
+    except asyncio.CancelledError:
+        pass
+    assert gate.paused is False     # gate reopened
+    assert task.cancelled()         # pending reopen was cancelled, not left sleeping

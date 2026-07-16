@@ -32,6 +32,14 @@ class ResumeGate:
         """Block at the top of a tick while the fleet is paused."""
         await self._open.wait()
 
+    def close(self) -> None:
+        """Teardown: cancel a pending reopen and open the gate so any loop blocked
+        in wait() wakes to observe stop() and exit — otherwise a kill-during-pause
+        leaves the reopen task sleeping (up to _MAX_WAIT_S) and drains slowly (T15)."""
+        if self._reopen_task is not None:
+            self._reopen_task.cancel()
+        self._open.set()
+
     @property
     def paused(self) -> bool:
         return not self._open.is_set()

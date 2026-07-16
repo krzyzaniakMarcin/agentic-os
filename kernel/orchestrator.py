@@ -93,6 +93,7 @@ async def run_episode(cfg: dict, *, run_id: str | None = None) -> list[dict]:
     finally:
         for a in agents:
             a.stop()  # loops exit once their in-flight step() finishes + records agent.step
+        gate.close()  # wake any loop parked at the resume-gate so it can exit (T15)
         await _drain(tasks)
     return await summarize(run_id)
 
