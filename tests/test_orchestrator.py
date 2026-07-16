@@ -104,3 +104,21 @@ async def test_wall_clock_timeout_halts(monkeypatch):
 
     halt = [e for e in events if e["type"] == "system.halt"]
     assert halt and halt[0]["payload"]["reason"] == "timeout"
+
+
+async def test_quiescence_terminates_without_halt(monkeypatch):
+    _install_memory_log(monkeypatch)
+
+    async def fake_runner(prompt, env):  # emits nothing beyond the loop's agent.step
+        return {"usage": {}}
+
+    monkeypatch.setattr(claude_code, "_run_claude", fake_runner)
+
+    cfg = {"goal": "g",
+           "roles": [{"name": "w", "subscribes_to": ["task.created"], "prompt": "p"}],
+           "quiescence_s": 0.0, "tick_s": 0.0}
+    events = await orchestrator.run_episode(cfg)
+
+    # terminated cleanly on quiescence — no budget/timeout halt was needed
+    assert not [e for e in events if e["type"] == "system.halt"]
+    assert any(e["type"] == "agent.step" for e in events)  # it did do work first

@@ -23,6 +23,7 @@ class Agent:
         self.see_own_events = role.see_own_events
         self.tick_s = role.tick_s
         self.step_n = 0
+        self.in_step = False  # True while step() runs; T11 quiescence reads this
         self._stopped = False
 
     @property
