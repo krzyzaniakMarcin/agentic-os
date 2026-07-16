@@ -122,3 +122,26 @@ async def test_quiescence_terminates_without_halt(monkeypatch):
     # terminated cleanly on quiescence — no budget/timeout halt was needed
     assert not [e for e in events if e["type"] == "system.halt"]
     assert any(e["type"] == "agent.step" for e in events)  # it did do work first
+
+
+def test_main_loads_supervisor_topology(monkeypatch):
+    """main() must build its cfg from the YAML topology, not a hardcoded stub."""
+    import kernel.orchestrator as orch
+
+    captured = {}
+
+    async def fake_run_episode(cfg, **kw):
+        captured["cfg"] = cfg
+        return []
+
+    monkeypatch.setattr(orch, "run_episode", fake_run_episode)
+    monkeypatch.setattr(orch.tracing, "configure_tracing", lambda: None)
+    monkeypatch.setattr(orch.tracing, "shutdown_tracing", lambda: None)
+
+    import asyncio
+    asyncio.run(orch.main())
+
+    cfg = captured["cfg"]
+    names = {r["name"] for r in cfg["roles"]}
+    assert names == {"supervisor", "worker"}
+    assert cfg["goal"]  # seeded from the topology, not empty

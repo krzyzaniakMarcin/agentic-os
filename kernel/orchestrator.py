@@ -11,12 +11,15 @@ purely the `types` filter each loop carries (arch §6). Rails, nothing more.
 """
 import asyncio
 import contextlib
+import os
+import sys
 import uuid
 
 from agent import poll_loop
 from agent.role import load_role
 from agent.runtimes.claude_code import ClaudeCodeAgent
 from kernel import budget as budget_mod
+from kernel import config
 from kernel import termination
 from observability import tracing
 from substrate import log
@@ -89,33 +92,28 @@ async def run_episode(cfg: dict, *, run_id: str | None = None) -> list[dict]:
     return await summarize(run_id)
 
 
-# --- docker `kernel` command: hardcoded stub cfg (T14 replaces with YAML) -----
+# --- docker `kernel` command: load the YAML topology (phase1-plan §T14) --------
 
-_STUB_GOAL = "What is the capital of France?"
-_WORKER_PROMPT = (
-    "You are a worker agent in a multi-agent system. When you see a "
-    "'task.created' event, answer the question in its payload's 'goal' field. "
-    "Emit your answer as a 'claim.made' event with payload {\"answer\": <your "
-    "answer>} using the emit_event tool, then emit a 'run.complete' event to "
-    "signal the episode is done."
-)
+from pathlib import Path  # noqa: E402  (kept local to the entry-point section)
+
+_DEFAULT_TOPOLOGY = Path(__file__).resolve().parent.parent / "topologies" / "supervisor.yaml"
 
 
-def _stub_cfg() -> dict:
-    """Hardcoded run config mirroring run_phase0 (phase1-plan §T10). T14 replaces
-    this with topologies/supervisor.yaml + a loader. Defines the cfg *shape*
-    run_episode consumes; T14 supplies the parser."""
-    return {
-        "goal": _STUB_GOAL,
-        "roles": [
-            {"name": "worker", "subscribes_to": ["task.created"], "prompt": _WORKER_PROMPT},
-        ],
-    }
+def _topology_path() -> Path:
+    """Run-config path via arg or env, else the default topology (phase1-plan
+    §T10: 'run-config path via arg/env')."""
+    if len(sys.argv) > 1:
+        return Path(sys.argv[1])
+    return Path(os.environ.get("TOPOLOGY", _DEFAULT_TOPOLOGY))
 
 
-async def main() -> None:
+async def main(topology_path: Path | None = None) -> None:
+    # topology_path resolved by the caller (the __main__ guard below reads
+    # argv/env there) — main() must not read live process sys.argv itself,
+    # since that also fires when a test calls main() directly under pytest,
+    # whose own argv (test path, -v, ...) would get mistaken for a topology.
     tracing.configure_tracing()  # first live OTLP export call site (absorbs run_phase0)
-    cfg = _stub_cfg()
+    cfg = config.load_run_config(topology_path or _DEFAULT_TOPOLOGY)
     print(f"goal={cfg['goal']!r}")
     try:
         events = await run_episode(cfg)
@@ -128,4 +126,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(_topology_path()))
