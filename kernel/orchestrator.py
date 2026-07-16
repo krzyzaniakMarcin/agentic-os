@@ -11,20 +11,18 @@ purely the `types` filter each loop carries (arch §6). Rails, nothing more.
 """
 import asyncio
 import contextlib
-import time
 import uuid
 
 from agent import poll_loop
 from agent.role import load_role
 from agent.runtimes.claude_code import ClaudeCodeAgent
+from kernel import budget as budget_mod
 from kernel import termination
 from observability import tracing
 from substrate import log
 
-# ponytail: standalone wall-clock guard so a wedged live model can't hang the
-# demo before T12 exists. T12 folds this into budget.breached() (usd + wall-
-# clock + kill switch), and T15 makes it exclude paused time — the `elapsed`
-# calc is factored here so that's a one-line move, not a retrofit.
+# Default wall-clock cap handed to budget.Budget when the run config omits one —
+# a wedged live model can't hang the demo. T15 makes Budget exclude paused time.
 _DEFAULT_RUN_TIMEOUT_S = 300.0
 # Let the in-flight step() return so the loop records its agent.step before we
 # tear down — the exit criterion wants that record (P0 drain discipline).
@@ -69,18 +67,17 @@ async def run_episode(cfg: dict, *, run_id: str | None = None) -> list[dict]:
         run_id, agents, cfg.get("quiescence_s", _DEFAULT_QUIESCENCE_S)
     )
 
-    budget = cfg.get("budget")  # T12 supplies an object with async breached()->str|None
+    # Injectable for tests; otherwise the real rail (usd + wall-clock + kill).
+    budget = cfg.get("budget") or budget_mod.Budget(
+        run_id,
+        usd_budget=cfg.get("usd_budget"),
+        timeout_s=cfg.get("run_timeout_s", _DEFAULT_RUN_TIMEOUT_S),
+    )
     tick_s = cfg.get("tick_s", 0.5)
-    timeout_s = cfg.get("run_timeout_s", _DEFAULT_RUN_TIMEOUT_S)
-    started = time.monotonic()
     try:
         while True:
-            if budget is not None and (reason := await budget.breached()):
+            if reason := await budget.breached():
                 await log.emit("kernel", "system.halt", {"reason": reason}, run_id=run_id)
-                break
-            elapsed = time.monotonic() - started  # T15: subtract paused time here
-            if timeout_s is not None and elapsed > timeout_s:
-                await log.emit("kernel", "system.halt", {"reason": "timeout"}, run_id=run_id)
                 break
             if await term.terminated():  # run.complete or quiescence (T11)
                 break
