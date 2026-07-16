@@ -46,7 +46,7 @@
 - **A rate-limit pause is not quiescence (interaction with T15):** agents blocked at T15's resume-gate are *not* `in_step` and emit nothing, so naive quiescence would kill a run that is merely throttled. `terminated()` must also treat **the gate being closed** as "busy" — i.e. no quiescence while the fleet is paused. (In P0 this couldn't happen because the wait lived *inside* `step()`; T15's lift to a kernel gate is what introduces it.)
 - **Self-check:** with fake agents and a fake clock, assert (1) `run.complete` terminates immediately; (2) quiescence fires only after `quiescence_s` of no events *and* no agent `in_step`; (3) an `in_step` agent suppresses quiescence past the threshold; (4) a closed resume-gate suppresses quiescence.
 
-### T12 — `kernel/budget.py` (the rails)
+### T12 — `kernel/budget.py` (the rails) ✅ done
 - Global **`usd_budget`** summed from `agent.step` `usage` (§4) + **wall-clock** `timeout_s` + a **kill switch**. `breached()` returns the first tripped reason; the orchestrator (T10) turns a breach into `system.halt` + stop.
 - **Pin the cost field:** the P0 `agent.step` `usage` comes from the `claude -p` result JSON — sum `usage["total_cost_usd"]` (verified present in `claude_code._parse_usage`); missing/None counts as 0 so a malformed step can't crash the rail.
 - **Accumulate incrementally, don't re-scan:** `read_events` defaults to `limit=50`, so a naive "sum all `agent.step` each tick" projection freezes at 50 rows and the rail stops tripping. Keep a `since_id` cursor + a running dollar total, reading only new `agent.step` events per tick (same probe pattern as T11).
