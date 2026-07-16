@@ -35,7 +35,7 @@ def _install_memory_log(monkeypatch):
 async def test_run_complete_terminates_and_records(monkeypatch):
     store = _install_memory_log(monkeypatch)
 
-    async def fake_runner(prompt, env):
+    async def fake_runner(prompt, env, max_budget_usd=None):
         # Simulate the model emitting through the substrate MCP during the step.
         await log.emit(env["AGENT_NAME"], "claim.made", {"answer": "Paris"},
                        run_id=env["RUN_ID"])
@@ -67,7 +67,7 @@ async def test_budget_breach_halts_and_stops_all(monkeypatch):
 
     monkeypatch.setattr(orchestrator, "ClaudeCodeAgent", Spy)
 
-    async def fake_runner(prompt, env):  # emits nothing → no run.complete
+    async def fake_runner(prompt, env, max_budget_usd=None):  # emits nothing → no run.complete
         return {"usage": {"input_tokens": 1}}
 
     monkeypatch.setattr(claude_code, "_run_claude", fake_runner)
@@ -92,7 +92,7 @@ async def test_wall_clock_timeout_halts(monkeypatch):
     # a run whose model never emits run.complete (the docker demo path).
     _install_memory_log(monkeypatch)
 
-    async def fake_runner(prompt, env):  # never emits run.complete
+    async def fake_runner(prompt, env, max_budget_usd=None):  # never emits run.complete
         return {"usage": {}}
 
     monkeypatch.setattr(claude_code, "_run_claude", fake_runner)
@@ -109,7 +109,7 @@ async def test_wall_clock_timeout_halts(monkeypatch):
 async def test_quiescence_terminates_without_halt(monkeypatch):
     _install_memory_log(monkeypatch)
 
-    async def fake_runner(prompt, env):  # emits nothing beyond the loop's agent.step
+    async def fake_runner(prompt, env, max_budget_usd=None):  # emits nothing beyond the loop's agent.step
         return {"usage": {}}
 
     monkeypatch.setattr(claude_code, "_run_claude", fake_runner)
