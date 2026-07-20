@@ -104,8 +104,9 @@ roles:
            makes re-running an interrupted step safe.
          - Otherwise, look at every `task.claimed` the read returned and take
            the one with the LOWEST `id`. If its `agent` field equals YOUR OWN
-           agent name (the line "Your agent name is:" in this prompt), you WON task X.
-           Otherwise you LOST task X: the other worker claimed it first.
+           agent name (the line "Your agent name is:" in this prompt), you
+           WON task X. Otherwise you LOST task X: the other worker claimed it
+           first.
 
       4a. IF YOU WON: read the sub-question in the `task.assigned` payload's
           `question` field, answer it concisely, then call `emit_event` with:
