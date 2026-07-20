@@ -16,21 +16,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from functools import partial
 from pathlib import Path
 
-from agent.base import Agent
+from agent.base import Agent, RateLimitError
 from agent.role import Role
 
 # repo-root-relative so it works regardless of CWD (agent/runtimes/ → ../../).
 _MCP_CONFIG = Path(__file__).resolve().parents[2] / "config" / "claude" / ".mcp.json"
 
-# ponytail: bounded single-agent rate-limit wait-and-resume. Fixed retry cap +
-# max wait is enough for one coroutine — while it sleeps it costs zero tokens
-# and other agents keep ticking (asyncio). The COORDINATED fleet-wide version
-# (pause the whole fleet on a shared limit) is a Phase 1 rail (arch §9);
-# upgrade path: replace this per-agent sleep with a shared limit rail.
-_MAX_RETRIES = 5
+# ponytail: rate-limit handling is now a KERNEL rail (phase1-plan §T15). step()
+# raises RateLimitError(wait_s) up to the poll loop, which pauses the whole fleet
+# on a shared resume-gate — no per-agent sleep here. _rate_limit_wait_s stays: it
+# parses the wait from the result; only the sleeping moved out.
 _MAX_WAIT_S = 3600.0
 _DEFAULT_BACKOFF_S = 60.0
 
@@ -46,7 +45,16 @@ class ClaudeCodeAgent(Agent):
     async def step(self, new_events: list[dict]) -> tuple[list, dict]:
         prompt = _build_prompt(self.prompt, new_events)
         env = self._subprocess_env()
-        result = await self._invoke_with_retry(prompt, env)
+        result = await self._runner(prompt, env)
+        wait = _rate_limit_wait_s(result, time.time())
+        if wait is not None:
+            # Don't sleep alone: report up to the kernel, which pauses the whole
+            # fleet and re-runs this step with the same window on resume (T15).
+            raise RateLimitError(wait)
+        # ponytail: non-limit errors (auth, invalid request, bad model turn) fall
+        # through here and the loop advances the cursor with no run.complete — a
+        # silent drop, acceptable for the demo. Surface via an error event if
+        # agents must recover.
         return [], _parse_usage(result)
 
     def _subprocess_env(self) -> dict:
@@ -60,21 +68,6 @@ class ClaudeCodeAgent(Agent):
         if env.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
             env.setdefault("CLAUDE_CODE_ENABLE_TELEMETRY", "1")
         return env
-
-    async def _invoke_with_retry(self, prompt: str, env: dict) -> dict:
-        import time
-
-        for attempt in range(_MAX_RETRIES + 1):
-            result = await self._runner(prompt, env)
-            wait = _rate_limit_wait_s(result, time.time())
-            if wait is None or attempt == _MAX_RETRIES:
-                # ponytail: non-limit errors (auth, invalid request, bad model
-                # turn) return here and the loop advances the cursor past the
-                # triggering events with no run.complete emitted — a silent
-                # drop, acceptable for the P0 demo. Surface them via the log
-                # (an error event / harness signal) if agents must recover.
-                return result  # success, non-limit error, or out of retries
-            await asyncio.sleep(wait)  # idle at zero token cost; cursor lives in the log
 
 
 def _build_prompt(role_prompt: str, new_events: list[dict]) -> str:

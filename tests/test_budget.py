@@ -93,3 +93,18 @@ async def test_no_rails_never_breaches(monkeypatch):
     await _step(999.0)
     clk.t = 10_000.0
     assert await b.breached() is None
+
+
+async def test_timeout_excludes_paused_time(monkeypatch):
+    _install_log(monkeypatch)
+    clock = Clock()
+    paused = [0.0]
+    b = budget.Budget("r", timeout_s=100.0, clock=clock,
+                       paused_s=lambda: paused[0])
+
+    clock.t = 150.0      # 150s of wall time...
+    paused[0] = 60.0     # ...but 60s was a throttle -> effective 90s < 100s
+    assert await b.breached() is None
+
+    paused[0] = 40.0     # effective 110s > 100s -> the rail trips
+    assert await b.breached() == "timeout"

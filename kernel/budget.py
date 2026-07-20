@@ -25,18 +25,21 @@ def _step_cost(event: dict) -> float:
 class Budget:
     def __init__(self, run_id: str, *, usd_budget: float | None = None,
                  timeout_s: float | None = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 paused_s: Callable[[], float] | None = None):
         self._run_id = run_id
         self._usd_budget = usd_budget
         self._timeout_s = timeout_s
         self._clock = clock
+        # T15: subtract fleet-paused seconds so a throttle isn't read as a runaway.
+        self._paused_s = paused_s or (lambda: 0.0)
         self._started = clock()
         self._since_id = 0      # agent.step cursor — never re-scan
         self._spent = 0.0       # running dollar total
 
     def _elapsed(self) -> float:
-        # T15 subtracts paused time here — factored so it's a one-line change.
-        return self._clock() - self._started
+        # Wall time minus fleet-paused time: a rate-limit pause did no work (T15).
+        return self._clock() - self._started - self._paused_s()
 
     async def _accrue_cost(self) -> None:
         while True:

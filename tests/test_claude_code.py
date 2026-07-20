@@ -3,6 +3,7 @@ rate-limit wait-and-resume. No live `claude -p`; the runner is injected."""
 import pytest
 from functools import partial
 
+from agent.base import RateLimitError
 from agent.role import Role
 from agent.runtimes.claude_code import (
     ClaudeCodeAgent,
@@ -91,49 +92,25 @@ def test_non_rate_limit_error_is_not_retried():
     assert _rate_limit_wait_s(r, now=1000.0) is None
 
 
-async def test_step_retries_on_rate_limit_then_succeeds(monkeypatch):
-    slept = []
+async def test_step_raises_rate_limit_error(monkeypatch):
+    async def limited_runner(prompt, env):
+        return {"is_error": True,
+                "error": {"type": "rate_limit_error", "retry_after": 42.0}}
 
-    async def fake_sleep(s):
-        slept.append(s)
-
-    monkeypatch.setattr("agent.runtimes.claude_code.asyncio.sleep", fake_sleep)
-
-    calls = []
-
-    async def flaky_runner(prompt, env):
-        calls.append(1)
-        if len(calls) == 1:
-            return {"is_error": True, "error": {"type": "rate_limit_error", "retry_after": 5.0}}
-        return {"usage": {"input_tokens": 2}}
-
-    a = ClaudeCodeAgent(_role(), run_id="r1", runner=flaky_runner)
-    emits, usage = await a.step([{"id": 1, "type": "task.created", "payload": {}}])
-
-    assert len(calls) == 2  # retried once
-    assert slept == [5.0]  # waited the reset window
-    assert usage == {"input_tokens": 2}
+    a = ClaudeCodeAgent(_role(), run_id="r1", runner=limited_runner)
+    with pytest.raises(RateLimitError) as exc:
+        await a.step([{"id": 1, "agent": "kernel", "type": "task.created", "payload": {}}])
+    assert exc.value.wait_s == 42.0
 
 
-async def test_step_gives_up_after_cap(monkeypatch):
-    from agent.runtimes.claude_code import _MAX_RETRIES
+async def test_step_returns_usage_when_not_limited(monkeypatch):
+    async def ok_runner(prompt, env):
+        return {"usage": {"input_tokens": 3}, "total_cost_usd": 0.01}
 
-    async def fake_sleep(s):
-        pass
-
-    monkeypatch.setattr("agent.runtimes.claude_code.asyncio.sleep", fake_sleep)
-
-    calls = []
-
-    async def always_limited(prompt, env):
-        calls.append(1)
-        return {"is_error": True, "error": {"type": "rate_limit_error", "retry_after": 1.0}}
-
-    a = ClaudeCodeAgent(_role(), run_id="r1", runner=always_limited)
-    emits, usage = await a.step([{"id": 1, "type": "task.created", "payload": {}}])
-
-    assert len(calls) == _MAX_RETRIES + 1  # initial try + capped retries
-    assert emits == []  # still returns cleanly (usage from the limit result)
+    a = ClaudeCodeAgent(_role(), run_id="r1", runner=ok_runner)
+    emits, usage = await a.step([{"id": 1, "agent": "k", "type": "task.created", "payload": {}}])
+    assert emits == []
+    assert usage == {"input_tokens": 3, "total_cost_usd": 0.01}
 
 
 def test_rate_limit_wait_s_non_numeric_reset_uses_backoff():
