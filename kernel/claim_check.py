@@ -5,10 +5,15 @@ is model reliability and this assertion is what catches a regression. Runs as a
 projection over the event log — offline in tests against synthetic events, or
 `python -m kernel.claim_check <run_id>` against a real run.
 
-ponytail: this guard verifies outcomes reached within a single step attempt.
-It does not (and cannot, from the log alone) catch the retry ceiling described
-in topologies/supervisor_claim.yaml's header — a step retry re-emits
-task.claimed, which can strand a task at zero claim.made across a whole run.
+ponytail: the winner rule the protocol implements (topologies/
+supervisor_claim.yaml's &claim_prompt) is identity-based and retry-safe: a
+step retry re-emits task.claimed at a higher id, but the guard below still
+finds the SAME agent at the lowest id, and a retry landing after claim.made
+already exists is a no-op by construction. The remaining, genuinely
+unrecoverable case is a worker that holds the lowest task.claimed and then
+never runs again (dies permanently, no retry) — that strands the task at
+zero claim.made for the whole run, and this guard is what catches it, loudly,
+as "0 claims" rather than passing silently.
 """
 from __future__ import annotations
 

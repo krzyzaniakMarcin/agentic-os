@@ -12,17 +12,18 @@
 # Distinct names are MANDATORY — two agents under one name would emit agent.step
 # with colliding step_n and corrupt per-agent projections and replay (§4).
 #
-# ponytail: "exactly one claim.made per task" holds only within a single step
-# attempt, not across a retry. A step's claim emit + read is not idempotent: if
-# the step fails after emitting task.claimed (rate limit -> agent/poll_loop.py
-# drops the attempt whole, cursor/step_n unchanged; or any exception -> kernel/
-# orchestrator.py's _drain swallows it), the re-run emits a SECOND task.claimed
-# with a higher id, reads, sees it isn't the lowest, and wrongly concludes it
-# lost — even though the other worker already lost to the first (now-orphaned)
-# claim. Net result can be zero claim.made for that task. Upgrade path: a
-# harness-level per-step idempotency key (skip re-emitting on replay), or make
-# the winner rule identity-based (e.g. first writer of a unique row) instead of
-# comparing returned ids. See kernel/claim_check.py's module docstring.
+# ponytail: the winner rule is identity-based (lowest task.claimed BY AGENT
+# NAME, not by "the id my own emit_event call returned"), so a step retry that
+# re-emits a second, higher-id task.claimed still resolves correctly — the
+# retrying worker just sees its own earlier claim is still the lowest. The
+# read also pulls claim.made for the same correlation, so a retry that lands
+# after the winner already answered emits nothing instead of a duplicate. The
+# remaining ceiling: a worker that emits the lowest task.claimed and then dies
+# PERMANENTLY (never retries — e.g. the orchestrator tears down mid-step)
+# strands that task at zero claim.made for the whole run. No amount of
+# read-time cleverness recovers from a worker that never comes back; the guard
+# catches this loudly as "0 claims" (kernel/claim_check.py) rather than
+# passing silently. See kernel/claim_check.py's module docstring.
 goal: "Name three landmark public-key cryptosystems and state what hard problem each rests on."
 
 rails:
@@ -80,19 +81,25 @@ roles:
       that event's `id`. Run this claim protocol for X, one task at a time:
 
       1. CLAIM. Call `emit_event` with type `task.claimed`, payload {}, and
-         correlation "<X>" (the id X as a string). The tool returns an object
-         with an `id` field — call that returned id MY_CLAIM_ID.
+         correlation "<X>" (the id X as a string).
 
-      2. READ ONCE. Call `read_events` exactly once with types=["task.claimed"]
-         and correlation="<X>" (the same string). No waiting, no retry, no second
-         read: the log appends are serialized, so the moment your claim came back
-         with MY_CLAIM_ID, every event with a lower id is already visible to you.
-         One read is guaranteed to show every competing claim that could beat you.
+      2. READ ONCE. Call `read_events` exactly once with
+         types=["task.claimed", "claim.made"] and correlation="<X>" (the same
+         string). No waiting, no retry, no second read: the log appends are
+         serialized, so the moment your claim came back, every event with a
+         lower id is already visible to you. One read is guaranteed to show
+         every competing claim that could beat you, and whether this task was
+         already answered.
 
-      3. DECIDE. Look at the `id` of every event that read returned and take the
-         LOWEST one.
-         - If the lowest id equals MY_CLAIM_ID, you WON task X.
-         - Otherwise you LOST task X: the other worker claimed it first.
+      3. DECIDE, in this order:
+         - If the read returned ANY `claim.made`, task X is already answered
+           (by yourself or the other worker, possibly on an earlier attempt of
+           this same step). Emit nothing for X and move on — this is what
+           makes re-running an interrupted step safe.
+         - Otherwise, look at every `task.claimed` the read returned and take
+           the one with the LOWEST `id`. If its `agent` field equals YOUR OWN
+           agent name (see "Your agent name is:" above), you WON task X.
+           Otherwise you LOST task X: the other worker claimed it first.
 
       4a. IF YOU WON: read the sub-question in the `task.assigned` payload's
           `question` field, answer it concisely, then call `emit_event` with:

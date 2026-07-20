@@ -43,7 +43,7 @@ class ClaudeCodeAgent(Agent):
         self._runner = runner or partial(_run_claude, max_budget_usd=role.max_budget_usd)
 
     async def step(self, new_events: list[dict]) -> tuple[list, dict]:
-        prompt = _build_prompt(self.prompt, new_events)
+        prompt = _build_prompt(self.prompt, new_events, self.name)
         env = self._subprocess_env()
         result = await self._runner(prompt, env)
         wait = _rate_limit_wait_s(result, time.time())
@@ -70,8 +70,12 @@ class ClaudeCodeAgent(Agent):
         return env
 
 
-def _build_prompt(role_prompt: str, new_events: list[dict]) -> str:
-    lines = [role_prompt.strip(), "", "New events since your last step:"]
+def _build_prompt(role_prompt: str, new_events: list[dict], agent_name: str) -> str:
+    # Identity is otherwise invisible to the model: two workers share one
+    # prompt (topologies/supervisor_claim.yaml's &claim_prompt) and must each
+    # know their OWN name to resolve "am I the lowest task.claimed?" (T16).
+    lines = [role_prompt.strip(), "", f"Your agent name is: {agent_name}", "",
+             "New events since your last step:"]
     for e in new_events:
         lines.append(json.dumps({k: e.get(k) for k in ("id", "agent", "type", "payload")}))
     lines += ["", "React by emitting events with the substrate MCP tools."]

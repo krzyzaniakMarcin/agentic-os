@@ -79,6 +79,21 @@ def test_rejects_claim_with_no_task_claimed():
         assert_one_claim_per_task(events)
 
 
+def test_accepts_retry_that_re_emits_task_claimed():
+    # Retry-safe protocol (T16 fix): worker-1 wins with id 10, then its step is
+    # interrupted (rate limit) and retried, re-emitting a SECOND task.claimed
+    # at id 30. worker-1 is still the lowest-id claimant, so the guard must
+    # accept the single resulting claim.made as legitimate.
+    events = [
+        _assigned(2),
+        _claimed(10, 2, "worker-1"),
+        _claimed(11, 2, "worker-2"),
+        _claimed(30, 2, "worker-1"),  # worker-1's retry
+        _claim(40, 2, "worker-1"),
+    ]
+    assert_one_claim_per_task(events)  # must not raise
+
+
 def test_rejects_claim_not_backed_by_lowest_task_claimed():
     # worker-2's task.claimed has the lower id, so worker-2 should have won —
     # worker-1 answering anyway is a protocol violation, not just a miscount.

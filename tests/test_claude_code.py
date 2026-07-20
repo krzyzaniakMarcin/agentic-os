@@ -20,11 +20,12 @@ def _role(prompt="You are a solver.", name="worker"):
 
 def test_build_prompt_includes_role_and_events():
     events = [{"id": 3, "agent": "kernel", "type": "task.created", "payload": {"goal": "answer 6*7"}}]
-    p = _build_prompt("You are a solver.", events)
+    p = _build_prompt("You are a solver.", events, "worker-1")
     assert "You are a solver." in p
     assert "task.created" in p
     assert "answer 6*7" in p
     assert "substrate" in p.lower()  # tells the model how to respond
+    assert "worker-1" in p  # own identity, needed to resolve the claim race (T16)
 
 
 def test_parse_usage_passthrough():

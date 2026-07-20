@@ -41,6 +41,11 @@ def test_worker_prompt_encodes_the_claim_protocol():
     assert "lowest" in worker.lower()    # lowest-id-wins
     assert "claim.made" in worker        # the winner's output
     assert "nothing" in worker.lower()   # the loser emits nothing
+    # T16 retry fix: winner rule is identity-based, and the one read must also
+    # pull claim.made (retry-after-win is a no-op) alongside task.claimed.
+    assert '["task.claimed", "claim.made"]' in worker
+    assert "your own" in worker.lower() or "your agent name" in worker.lower()
+    assert "already answered" in worker.lower()
 
 
 def test_roles_load_and_carry_prompts():
