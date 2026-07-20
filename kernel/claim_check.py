@@ -9,7 +9,9 @@ ponytail: the winner rule the protocol implements (topologies/
 supervisor_claim.yaml's &claim_prompt) is identity-based and retry-safe: a
 step retry re-emits task.claimed at a higher id, but the guard below still
 finds the SAME agent at the lowest id, and a retry landing after claim.made
-already exists is a no-op by construction. The remaining, genuinely
+already exists is a no-op by protocol — provided the model follows step 3
+(topologies/supervisor_claim.yaml's &claim_prompt), not by any code-level
+guarantee. The remaining, genuinely
 unrecoverable case is a worker that holds the lowest task.claimed and then
 never runs again (dies permanently, no retry) — that strands the task at
 zero claim.made for the whole run, and this guard is what catches it, loudly,

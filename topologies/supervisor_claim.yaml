@@ -18,12 +18,17 @@
 # retrying worker just sees its own earlier claim is still the lowest. The
 # read also pulls claim.made for the same correlation, so a retry that lands
 # after the winner already answered emits nothing instead of a duplicate. The
-# remaining ceiling: a worker that emits the lowest task.claimed and then dies
-# PERMANENTLY (never retries — e.g. the orchestrator tears down mid-step)
-# strands that task at zero claim.made for the whole run. No amount of
-# read-time cleverness recovers from a worker that never comes back; the guard
+# remaining ceiling: any worker that emits the lowest task.claimed and then
+# never revisits that task — permanent death is one case, but so is
+# claude_code.py's step() swallowing a non-rate-limit error and letting the
+# poll loop advance the cursor past it, a budget breach halting the fleet
+# mid-window (kernel/orchestrator.py's system.halt), or stop()/_drain cutting
+# off a window that was partly processed. No amount of read-time cleverness
+# recovers from a worker that never comes back for that task; the guard
 # catches this loudly as "0 claims" (kernel/claim_check.py) rather than
-# passing silently. See kernel/claim_check.py's module docstring.
+# passing silently. Upgrade path: surface an error event so a worker's own
+# non-fatal failures can be retried. See kernel/claim_check.py's module
+# docstring.
 goal: "Name three landmark public-key cryptosystems and state what hard problem each rests on."
 
 rails:
@@ -84,12 +89,13 @@ roles:
          correlation "<X>" (the id X as a string).
 
       2. READ ONCE. Call `read_events` exactly once with
-         types=["task.claimed", "claim.made"] and correlation="<X>" (the same
-         string). No waiting, no retry, no second read: the log appends are
-         serialized, so the moment your claim came back, every event with a
-         lower id is already visible to you. One read is guaranteed to show
-         every competing claim that could beat you, and whether this task was
-         already answered.
+         types=["task.claimed", "claim.made"], correlation="<X>" (the same
+         string), and limit=500 (the default limit=50 can truncate away the
+         very claim.made you need to see). No waiting, no retry, no second
+         read: the log appends are serialized, so the moment your claim came
+         back, every event with a lower id is already visible to you. One
+         read is guaranteed to show every competing claim that could beat
+         you, and whether this task was already answered.
 
       3. DECIDE, in this order:
          - If the read returned ANY `claim.made`, task X is already answered
@@ -98,7 +104,7 @@ roles:
            makes re-running an interrupted step safe.
          - Otherwise, look at every `task.claimed` the read returned and take
            the one with the LOWEST `id`. If its `agent` field equals YOUR OWN
-           agent name (see "Your agent name is:" above), you WON task X.
+           agent name (the line "Your agent name is:" in this prompt), you WON task X.
            Otherwise you LOST task X: the other worker claimed it first.
 
       4a. IF YOU WON: read the sub-question in the `task.assigned` payload's
