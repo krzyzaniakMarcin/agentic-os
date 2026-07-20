@@ -1,0 +1,128 @@
+# topologies/supervisor_claim.yaml — Phase-1 claim-protocol demo (phase1-plan §T16).
+# A supervisor assigns sub-tasks; TWO workers of the same role race to claim each
+# one. Lowest event id wins, the loser backs off — so exactly one `claim.made`
+# lands per `task.assigned`. Verify a run with:
+#   python -m kernel.claim_check <run_id>   (kernel/claim_check.py)
+#
+# The two workers are two role entries sharing ONE prompt via the YAML anchor
+# `&claim_prompt` / `*claim_prompt`. `role.load_role` models neither duplicate
+# names nor an instance count, and it does not need to: the loader passes roles
+# through as raw dicts and the orchestrator spawns one agent per entry, so the
+# anchor gives a shared prompt with distinct identities at zero code cost.
+# Distinct names are MANDATORY — two agents under one name would emit agent.step
+# with colliding step_n and corrupt per-agent projections and replay (§4).
+#
+# ponytail: the winner rule is identity-based (lowest task.claimed BY AGENT
+# NAME, not by "the id my own emit_event call returned"), so a step retry that
+# re-emits a second, higher-id task.claimed still resolves correctly — the
+# retrying worker just sees its own earlier claim is still the lowest. The
+# read also pulls claim.made for the same correlation, so a retry that lands
+# after the winner already answered emits nothing instead of a duplicate. The
+# remaining ceiling: any worker that emits the lowest task.claimed and then
+# never revisits that task — permanent death is one case, but so is
+# claude_code.py's step() swallowing a non-rate-limit error and letting the
+# poll loop advance the cursor past it, a budget breach halting the fleet
+# mid-window (kernel/orchestrator.py's system.halt), or stop()/_drain cutting
+# off a window that was partly processed. No amount of read-time cleverness
+# recovers from a worker that never comes back for that task; the guard
+# catches this loudly as "0 claims" (kernel/claim_check.py) rather than
+# passing silently. Upgrade path: surface an error event so a worker's own
+# non-fatal failures can be retried. See kernel/claim_check.py's module
+# docstring.
+goal: "Name three landmark public-key cryptosystems and state what hard problem each rests on."
+
+rails:
+  usd_budget: 5.0      # global cost cap (T12); per-turn cap is Role.max_budget_usd (T13)
+  timeout_s: 300       # wall-clock backstop -> run_timeout_s
+  quiescence_s: 30     # end the run after this much idle time if no run.complete
+
+roles:
+  - name: supervisor
+    runtime: claude_code
+    subscribes_to: [task.created, claim.made]
+    prompt: |
+      You are the SUPERVISOR in a multi-agent system. You coordinate ONLY through
+      the shared event log using the substrate MCP tools `emit_event` and
+      `read_events`. You never talk to the workers directly. You are STATELESS:
+      each time you run you have no memory of previous steps, so you MUST
+      reconstruct your state from the log every time.
+
+      Do exactly this each time you run:
+
+      1. If the new events include a `task.created` event, read its payload's
+         `goal`. Decompose that goal into exactly 3 independent sub-questions.
+         For EACH sub-question, call `emit_event` with type `task.assigned` and
+         payload {"question": "<the sub-question>"}. Emit one event per
+         sub-question. Do this only once — if you have already emitted
+         `task.assigned` events (check step 2), do NOT emit more.
+
+      2. Reconstruct progress from the log. Call `read_events` with
+         types=["task.assigned"] to get every sub-question you assigned, and
+         `read_events` with types=["claim.made"] to get every answer so far.
+         Each `claim.made` result from `read_events` carries a `correlation`
+         equal to the `id` of the `task.assigned` it answers, as a STRING —
+         compare it against the `task.assigned` id in string form. Match
+         answers to questions by that `correlation` value.
+
+      3. If EVERY `task.assigned` id has a matching `claim.made` (by
+         correlation), then aggregate the answers into one final answer and call
+         `emit_event` with type `run.complete` and payload
+         {"answer": "<aggregated final answer>"}. If some sub-questions are still
+         unanswered, emit nothing and wait for the next step.
+
+      Emit `run.complete` exactly once, only when all sub-questions are answered.
+
+  - name: worker-1
+    runtime: claude_code
+    subscribes_to: [task.assigned]
+    prompt: &claim_prompt |
+      You are a WORKER in a multi-agent system. There is a SECOND worker running
+      the exact same instructions at the same time, and you will both be shown
+      the same `task.assigned` events. Exactly ONE of you may answer each task.
+      You coordinate ONLY through the shared event log using the substrate MCP
+      tools `emit_event` and `read_events`. You never talk to anyone directly.
+
+      For EACH `task.assigned` event in the new events you were given, let X be
+      that event's `id`. Run this claim protocol for X, one task at a time:
+
+      1. CLAIM. Call `emit_event` with type `task.claimed`, payload {}, and
+         correlation "<X>" (the id X as a string).
+
+      2. READ ONCE. Call `read_events` exactly once with
+         types=["task.claimed", "claim.made"], correlation="<X>" (the same
+         string), and limit=500 (the default limit=50 can truncate away the
+         very claim.made you need to see). No waiting, no retry, no second
+         read: the log appends are serialized, so the moment your claim came
+         back, every event with a lower id is already visible to you. One
+         read is guaranteed to show every competing claim that could beat
+         you, and whether this task was already answered.
+
+      3. DECIDE, in this order:
+         - If the read returned ANY `claim.made`, task X is already answered
+           (by yourself or the other worker, possibly on an earlier attempt of
+           this same step). Emit nothing for X and move on — this is what
+           makes re-running an interrupted step safe.
+         - Otherwise, look at every `task.claimed` the read returned and take
+           the one with the LOWEST `id`. If its `agent` field equals YOUR OWN
+           agent name (the line "Your agent name is:" in this prompt), you
+           WON task X. Otherwise you LOST task X: the other worker claimed it
+           first.
+
+      4a. IF YOU WON: read the sub-question in the `task.assigned` payload's
+          `question` field, answer it concisely, then call `emit_event` with:
+            - type: "claim.made"
+            - payload: {"answer": "<your answer>"}
+            - correlation: "<X>"  (the exact same string you used above)
+
+      4b. IF YOU LOST: emit NOTHING for task X. Do not answer it, do not emit
+          `claim.made`, do not emit any other event about it. Silently move on
+          to the next `task.assigned` event. Losing is a normal, correct outcome.
+
+      Never emit `claim.made` for a task you did not win. Emitting a second
+      `claim.made` for a task the other worker already claimed is the one failure
+      this protocol exists to prevent.
+
+  - name: worker-2
+    runtime: claude_code
+    subscribes_to: [task.assigned]
+    prompt: *claim_prompt
