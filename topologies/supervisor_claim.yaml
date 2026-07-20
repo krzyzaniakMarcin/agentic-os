@@ -11,6 +11,18 @@
 # anchor gives a shared prompt with distinct identities at zero code cost.
 # Distinct names are MANDATORY — two agents under one name would emit agent.step
 # with colliding step_n and corrupt per-agent projections and replay (§4).
+#
+# ponytail: "exactly one claim.made per task" holds only within a single step
+# attempt, not across a retry. A step's claim emit + read is not idempotent: if
+# the step fails after emitting task.claimed (rate limit -> agent/poll_loop.py
+# drops the attempt whole, cursor/step_n unchanged; or any exception -> kernel/
+# orchestrator.py's _drain swallows it), the re-run emits a SECOND task.claimed
+# with a higher id, reads, sees it isn't the lowest, and wrongly concludes it
+# lost — even though the other worker already lost to the first (now-orphaned)
+# claim. Net result can be zero claim.made for that task. Upgrade path: a
+# harness-level per-step idempotency key (skip re-emitting on replay), or make
+# the winner rule identity-based (e.g. first writer of a unique row) instead of
+# comparing returned ids. See kernel/claim_check.py's module docstring.
 goal: "Name three landmark public-key cryptosystems and state what hard problem each rests on."
 
 rails:
@@ -41,9 +53,10 @@ roles:
       2. Reconstruct progress from the log. Call `read_events` with
          types=["task.assigned"] to get every sub-question you assigned, and
          `read_events` with types=["claim.made"] to get every answer so far.
-         Each `claim.made` carries a `correlation` equal to the `id` of the
-         `task.assigned` it answers. Match answers to questions by that
-         `correlation` value.
+         Each `claim.made` result from `read_events` carries a `correlation`
+         equal to the `id` of the `task.assigned` it answers, as a STRING —
+         compare it against the `task.assigned` id in string form. Match
+         answers to questions by that `correlation` value.
 
       3. If EVERY `task.assigned` id has a matching `claim.made` (by
          correlation), then aggregate the answers into one final answer and call

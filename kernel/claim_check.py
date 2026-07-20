@@ -4,6 +4,11 @@ The claim protocol is model-driven (prompt + one ad-hoc MCP read), so the risk
 is model reliability and this assertion is what catches a regression. Runs as a
 projection over the event log — offline in tests against synthetic events, or
 `python -m kernel.claim_check <run_id>` against a real run.
+
+ponytail: this guard verifies outcomes reached within a single step attempt.
+It does not (and cannot, from the log alone) catch the retry ceiling described
+in topologies/supervisor_claim.yaml's header — a step retry re-emits
+task.claimed, which can strand a task at zero claim.made across a whole run.
 """
 from __future__ import annotations
 
@@ -15,14 +20,21 @@ from substrate import log
 
 def assert_one_claim_per_task(events: list[dict]) -> None:
     """Raise AssertionError unless every task.assigned has exactly one claim.made
-    correlated to it, and no claim.made correlates to anything else."""
+    correlated to it, and no claim.made correlates to anything else. Also
+    verifies the claim PROTOCOL was actually followed, not just the outcome:
+    each claim.made must be backed by a task.claimed from the same agent at the
+    same correlation, and that task.claimed must be the lowest-id one there —
+    otherwise a run that skipped claiming entirely could still look green."""
     tasks = {e["id"] for e in events if e["type"] == "task.assigned"}
     claims: dict[str, list[dict]] = {}
+    claimed: dict[str, list[dict]] = {}
     for e in events:
         if e["type"] == "claim.made":
             # correlation is TEXT in the log; normalize so an int-carrying
             # replayed/fake event matches the same task.
             claims.setdefault(str(e["correlation"]), []).append(e)
+        elif e["type"] == "task.claimed":
+            claimed.setdefault(str(e["correlation"]), []).append(e)
 
     for task_id in sorted(tasks):
         got = claims.get(str(task_id), [])
@@ -30,12 +42,27 @@ def assert_one_claim_per_task(events: list[dict]) -> None:
             f"task.assigned id={task_id}: {len(got)} claims, expected 1 "
             f"(by {[c['agent'] for c in got]})"
         )
+        winner = got[0]
+        rivals = claimed.get(str(task_id), [])
+        mine = [c for c in rivals if c["agent"] == winner["agent"]]
+        assert mine, (
+            f"task.assigned id={task_id}: claim.made by {winner['agent']} has no "
+            f"matching task.claimed — protocol was skipped"
+        )
+        lowest = min(rivals, key=lambda c: c["id"])
+        assert lowest["agent"] == winner["agent"], (
+            f"task.assigned id={task_id}: claim.made by {winner['agent']} but "
+            f"the lowest task.claimed id was from {lowest['agent']}"
+        )
 
     orphans = sorted(set(claims) - {str(t) for t in tasks})
     assert not orphans, f"claim.made with no task.assigned for correlation(s) {orphans}"
 
 
 async def _main(run_id: str) -> None:
+    # limit matches kernel/orchestrator.py's summarize() cap; a longer run reads
+    # only a prefix here and fails safe (spurious "0 claims"/orphan, never a
+    # false green).
     events = await log.read_events(run_id=run_id, limit=500)
     try:
         assert_one_claim_per_task(events)

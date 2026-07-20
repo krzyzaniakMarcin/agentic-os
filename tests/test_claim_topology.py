@@ -1,8 +1,6 @@
 # tests/test_claim_topology.py — T16: two same-role workers, distinct identities.
 from pathlib import Path
 
-import yaml
-
 from agent.role import load_role
 from kernel.config import load_run_config
 
@@ -10,12 +8,11 @@ _TOPO = Path(__file__).resolve().parents[1] / "topologies" / "supervisor_claim.y
 
 
 def test_two_workers_with_distinct_names():
+    # Distinct names are mandatory: colliding names collide step_n in the
+    # agent.step record and corrupt per-agent projections (phase1-plan §4).
     cfg = load_run_config(_TOPO)
     names = [r["name"] for r in cfg["roles"]]
     assert names == ["supervisor", "worker-1", "worker-2"]
-    # Distinct names are mandatory: colliding names collide step_n in the
-    # agent.step record and corrupt per-agent projections (phase1-plan §4).
-    assert len(set(names)) == len(names)
 
 
 def test_workers_share_one_prompt_and_subscription():
@@ -58,10 +55,3 @@ def test_topology_carries_rails():
     assert cfg["usd_budget"] is not None
     assert cfg["run_timeout_s"] > 0
     assert cfg["quiescence_s"] > 0
-
-
-def test_no_agent_shares_a_name_with_another():
-    # Guards the whole roles list, not just the workers.
-    raw = yaml.safe_load(_TOPO.read_text())
-    names = [r["name"] for r in raw["roles"]]
-    assert len(set(names)) == len(names)
